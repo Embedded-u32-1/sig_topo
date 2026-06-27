@@ -4,11 +4,11 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
-pub struct ActionContext<'a> {
-    pub signal_id: &'a str,
-    pub from_state: &'a str,
-    pub to_state: &'a str,
-    pub event: &'a str,
+pub struct ActionContext {
+    pub signal_id: String,
+    pub from_state: String,
+    pub to_state: String,
+    pub event: String,
     pub payload: Option<Value>,
 }
 
@@ -103,7 +103,7 @@ impl TopologyEngine {
     
     pub fn send_event(&mut self, signal_id: &str, event: &str, payload: Option<Value>) -> Result<TransitionResult, EngineError> {
         let signal = self.signals.get_mut(signal_id)
-            .ok_or(EngineError::SignalNotFound)?;
+            .ok_or_else(|| EngineError::SignalNotFound(signal_id.to_string()))?;
         
         let transition = self.transitions.iter()
             .find(|t| t.signal_id == signal_id && t.event == event && (t.from == signal.current || t.from == "*"))
@@ -118,12 +118,12 @@ impl TopologyEngine {
         
         for action_id in &transition.actions.on_exit {
             let action = self.actions.get_mut(action_id)
-                .ok_or(EngineError::ActionNotFound)?;
+                .ok_or_else(|| EngineError::ActionNotFound(action_id.clone()))?;
             let ctx = ActionContext {
-                signal_id,
-                from_state: &from_state,
-                to_state: &to_state,
-                event,
+                signal_id: signal_id.to_string(),
+                from_state: from_state.clone(),
+                to_state: to_state.clone(),
+                event: event.to_string(),
                 payload: payload.clone(),
             };
             action(ctx).map_err(|e| {
@@ -140,12 +140,12 @@ impl TopologyEngine {
         
         for action_id in &transition.actions.on_transition {
             let action = self.actions.get_mut(action_id)
-                .ok_or(EngineError::ActionNotFound)?;
+                .ok_or_else(|| EngineError::ActionNotFound(action_id.clone()))?;
             let ctx = ActionContext {
-                signal_id,
-                from_state: &from_state,
-                to_state: &to_state,
-                event,
+                signal_id: signal_id.to_string(),
+                from_state: from_state.clone(),
+                to_state: to_state.clone(),
+                event: event.to_string(),
                 payload: payload.clone(),
             };
             action(ctx).map_err(|e| {
@@ -160,12 +160,12 @@ impl TopologyEngine {
         
         for action_id in &transition.actions.on_enter {
             let action = self.actions.get_mut(action_id)
-                .ok_or(EngineError::ActionNotFound)?;
+                .ok_or_else(|| EngineError::ActionNotFound(action_id.clone()))?;
             let ctx = ActionContext {
-                signal_id,
-                from_state: &from_state,
-                to_state: &to_state,
-                event,
+                signal_id: signal_id.to_string(),
+                from_state: from_state.clone(),
+                to_state: to_state.clone(),
+                event: event.to_string(),
                 payload: payload.clone(),
             };
             action(ctx).map_err(|e| {
@@ -188,7 +188,7 @@ impl TopologyEngine {
     
     pub fn get_state(&self, signal_id: &str) -> Result<&str, EngineError> {
         let signal = self.signals.get(signal_id)
-            .ok_or(EngineError::SignalNotFound)?;
+            .ok_or_else(|| EngineError::SignalNotFound(signal_id.to_string()))?;
         Ok(&signal.current)
     }
 }
