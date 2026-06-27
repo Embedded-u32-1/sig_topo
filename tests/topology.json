@@ -1,0 +1,44 @@
+{
+  "version": "0.1",
+  "signals": [
+    {
+      "id": "task_status",
+      "initial_state": "idle",
+      "states": ["idle", "running", "success", "failed"]
+    }
+  ],
+  "transitions": [
+    {
+      "signal_id": "task_status",
+      "from": "idle",
+      "event": "start",
+      "to": "running",
+      "actions": {
+        "on_exit": ["log_idle_leave"],
+        "on_transition": ["init_task_resource"],
+        "on_enter": ["start_task_execution"]
+      }
+    },
+    {
+      "signal_id": "task_status",
+      "from": "running",
+      "event": "finish",
+      "to": "success",
+      "actions": { "on_enter": ["notify_task_success"] }
+    },
+    {
+      "signal_id": "task_status",
+      "from": "running",
+      "event": "error",
+      "to": "failed",
+      "actions": { "on_enter": ["record_task_error"] }
+    },
+    {
+      "signal_id": "task_status",
+      "from": "*",
+      "event": "reset",
+      "to": "idle",
+      "actions": { "on_transition": ["clear_task_data"] }
+    }
+  ]
+}
