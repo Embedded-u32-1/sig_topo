@@ -2,6 +2,8 @@ use crate::schema::{TopologySchema, TransitionDef};
 use std::collections::HashMap;
 
 pub fn to_dot(schema: &TopologySchema) -> String {
+    // Cross-signal reactions (cascades) are intentionally omitted from DOT
+    // output to keep diagrams readable; only explicit transitions are drawn.
     let mut out = String::new();
     out.push_str("digraph Topology {\n");
     out.push_str("  rankdir=LR;\n");

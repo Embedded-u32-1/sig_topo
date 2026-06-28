@@ -1,6 +1,6 @@
 use crate::error::EngineError;
 use crate::guard::eval_guard;
-use crate::schema::{TopologySchema, TransitionDef};
+use crate::schema::{ReactionDef, TopologySchema, TransitionDef};
 use crate::trace::{now_ms, TraceEvent, TraceLog};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -27,8 +27,10 @@ type ActionFn = Box<dyn FnMut(ActionContext) -> Result<(), EngineError> + 'stati
 pub struct TopologyEngine {
     pub(crate) signals: HashMap<String, SignalState>,
     pub(crate) transitions: Vec<TransitionDef>,
+    pub(crate) reactions: Vec<ReactionDef>,
     actions: HashMap<String, ActionFn>,
     trace: TraceLog,
+    max_cascade_depth: usize,
 }
 
 pub(crate) struct SignalState {
@@ -60,8 +62,10 @@ impl TopologyEngine {
         Ok(TopologyEngine {
             signals,
             transitions: schema.transitions,
+            reactions: schema.reactions,
             actions: HashMap::new(),
             trace: TraceLog::default(),
+            max_cascade_depth: 8,
         })
     }
 
@@ -110,6 +114,19 @@ impl TopologyEngine {
             }
         }
 
+        for reaction in &schema.reactions {
+            if !signal_ids.contains(&reaction.from_signal) {
+                return Err(EngineError::ReactionSignalNotFound(
+                    reaction.from_signal.clone(),
+                ));
+            }
+            if !signal_ids.contains(&reaction.to_signal) {
+                return Err(EngineError::ReactionSignalNotFound(
+                    reaction.to_signal.clone(),
+                ));
+            }
+        }
+
         Ok(())
     }
 
@@ -119,6 +136,10 @@ impl TopologyEngine {
     {
         self.actions
             .insert(action_id.to_string(), Box::new(f));
+    }
+
+    pub fn set_max_cascade_depth(&mut self, depth: usize) {
+        self.max_cascade_depth = depth;
     }
 
     fn run_action(
@@ -163,6 +184,20 @@ impl TopologyEngine {
         event: &str,
         payload: Option<Value>,
     ) -> Result<TransitionResult, EngineError> {
+        self.send_event_internal(signal_id, event, payload, 0)
+    }
+
+    fn send_event_internal(
+        &mut self,
+        signal_id: &str,
+        event: &str,
+        payload: Option<Value>,
+        depth: usize,
+    ) -> Result<TransitionResult, EngineError> {
+        if depth > self.max_cascade_depth {
+            return Err(EngineError::CascadeDepthExceeded);
+        }
+
         self.trace.push(TraceEvent::EventReceived {
             signal_id: signal_id.to_string(),
             event: event.to_string(),
@@ -257,12 +292,33 @@ impl TopologyEngine {
             executed_actions.push(action_id.clone());
         }
 
-        Ok(TransitionResult {
+        let result = TransitionResult {
             signal_id: signal_id.to_string(),
             from: from_state,
             to: to_state,
             executed_actions,
-        })
+        };
+
+        let matching_reactions: Vec<ReactionDef> = self
+            .reactions
+            .iter()
+            .filter(|r| {
+                r.from_signal == signal_id
+                    && (r.from_state == result.to || r.from_state == "*")
+            })
+            .cloned()
+            .collect();
+
+        for reaction in matching_reactions {
+            self.send_event_internal(
+                &reaction.to_signal,
+                &reaction.event,
+                reaction.payload.clone(),
+                depth + 1,
+            )?;
+        }
+
+        Ok(result)
     }
 
     pub fn get_state(&self, signal_id: &str) -> Result<&str, EngineError> {
@@ -300,6 +356,7 @@ impl TopologyEngine {
 
         self.signals = new_signals;
         self.transitions = schema.transitions;
+        self.reactions = schema.reactions;
         Ok(())
     }
 
