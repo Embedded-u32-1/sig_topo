@@ -49,12 +49,42 @@
 - 可视化最佳实践
 - 示例 JSON 库（任务状态、订单状态、门控流程）
 
+## 下下阶段目标：动作可观测性（v0.3）
+
+MVP 的动作函数返回 `Result<(), EngineError>`，调用者无法知道动作内部具体发生了什么。为了让拓扑图真正可调试、可追踪，下一步引入动作执行事件流：
+
+方案：在 `TopologyEngine` 内部维护一个只追加的 Trace 日志，记录每一次状态转移、动作开始/成功/失败、事件投递。提供只读导出 API，不影响运行时逻辑。
+
+#### 里程碑 M4：Trace 事件模型
+
+- 新增 `src/trace.rs`：
+  - `TraceEvent` 枚举：`EventReceived`、`ActionStarted`、`ActionSucceeded`、`ActionFailed`、`StateChanged`
+  - `TraceLog` 结构体：只追加 Vec，支持按信号过滤、按时间范围截取
+- 扩展 `EngineError` 保留原始错误信息用于 Trace
+
+#### 里程碑 M5：引擎内嵌 Trace 收集
+
+- `TopologyEngine` 内部持有一个 `TraceLog`
+- `send_event` 执行过程中自动追加 Trace 事件
+- 新增 API：
+  - `engine.traces()` 返回全部 Trace
+  - `engine.traces_for(signal_id)` 按信号过滤
+  - `engine.clear_traces()` 清空日志
+- 动作执行失败时，Trace 中保留错误信息，状态回滚或不回滚按当前行为（不回滚）
+
+#### 里程碑 M6：Trace 可视化增强
+
+- 扩展 DOT 导出，支持按 Trace 高亮“最近走过的边”
+- 新增 CLI 子命令或工具，输出 Trace 为文本时间线
+- 文档：如何根据 Trace 排查状态流转问题
+
 ## 技术边界（保持克制）
 
 - 不引入 Web 前端/编辑器（避免复杂度爆炸）
 - 可视化只读，不写回 JSON
 - 不改动核心引擎运行时行为
 - 优先使用文本格式与系统工具，不绑定特定图像库
+- Trace 是运行时调试工具，不做持久化、不做分布式追踪
 
 ## 验收标准
 
