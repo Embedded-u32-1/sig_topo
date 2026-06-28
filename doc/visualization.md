@@ -55,7 +55,7 @@ let dot = to_dot(&schema);
 The generated diagram uses:
 
 - One subgraph per signal, labeled with the signal id.
-- One node per state, named `<signal_id>_<state>`.
+- One node per state, named `n_<signal_id>_<state>`.
 - A filled light-blue style for the initial state node.
 - Directed edges labeled with event names and associated action ids.
 - Wildcard (`*`) transitions expanded into edges from every state to the target state.

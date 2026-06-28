@@ -92,7 +92,7 @@ fn sanitize_id(input: &str) -> String {
 }
 
 fn node_id(signal_id: &str, state: &str) -> String {
-    format!("{}_{}", sanitize_id(signal_id), sanitize_id(state))
+    format!("n_{}_{}", sanitize_id(signal_id), sanitize_id(state))
 }
 
 fn escape_label(input: &str) -> String {
