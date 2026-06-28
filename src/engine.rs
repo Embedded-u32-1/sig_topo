@@ -38,7 +38,10 @@ impl TopologyEngine {
     pub fn from_json(json_str: &str) -> Result<Self, EngineError> {
         let schema: TopologySchema =
             serde_json::from_str(json_str).map_err(|e| EngineError::ParseError(e.to_string()))?;
+        Self::from_schema(schema)
+    }
 
+    pub fn from_schema(schema: TopologySchema) -> Result<Self, EngineError> {
         Self::validate(&schema)?;
 
         let mut signals = HashMap::new();
@@ -107,12 +110,48 @@ impl TopologyEngine {
         Ok(())
     }
 
-    pub fn register_action<F>(&mut self, action_id: &str, mut f: F)
+    pub fn register_action<F>(&mut self, action_id: &str, f: F)
     where
         F: FnMut(ActionContext) -> Result<(), EngineError> + 'static,
     {
         self.actions
-            .insert(action_id.to_string(), Box::new(move |ctx| f(ctx)));
+            .insert(action_id.to_string(), Box::new(f));
+    }
+
+    fn run_action(
+        trace: &mut TraceLog,
+        actions: &mut HashMap<String, ActionFn>,
+        signal_id: &str,
+        action_id: &str,
+        ctx: ActionContext,
+    ) -> Result<(), EngineError> {
+        trace.push(TraceEvent::ActionStarted {
+            signal_id: signal_id.to_string(),
+            action_id: action_id.to_string(),
+            timestamp_ms: now_ms(),
+        });
+        let action = actions
+            .get_mut(action_id)
+            .ok_or_else(|| EngineError::ActionNotFound(action_id.to_string()))?;
+        action(ctx).map_err(|e| {
+            let msg = match &e {
+                EngineError::ActionExecutionError(m) => m.clone(),
+                _ => e.to_string(),
+            };
+            trace.push(TraceEvent::ActionFailed {
+                signal_id: signal_id.to_string(),
+                action_id: action_id.to_string(),
+                timestamp_ms: now_ms(),
+                error: msg.clone(),
+            });
+            EngineError::ActionExecutionError(msg)
+        })?;
+        trace.push(TraceEvent::ActionSucceeded {
+            signal_id: signal_id.to_string(),
+            action_id: action_id.to_string(),
+            timestamp_ms: now_ms(),
+        });
+        Ok(())
     }
 
     pub fn send_event(
@@ -151,15 +190,6 @@ impl TopologyEngine {
         let mut executed_actions = Vec::new();
 
         for action_id in &transition.actions.on_exit {
-            self.trace.push(TraceEvent::ActionStarted {
-                signal_id: signal_id.to_string(),
-                action_id: action_id.clone(),
-                timestamp_ms: now_ms(),
-            });
-            let action = self
-                .actions
-                .get_mut(action_id)
-                .ok_or_else(|| EngineError::ActionNotFound(action_id.clone()))?;
             let ctx = ActionContext {
                 signal_id: signal_id.to_string(),
                 from_state: from_state.clone(),
@@ -167,24 +197,13 @@ impl TopologyEngine {
                 event: event.to_string(),
                 payload: payload.clone(),
             };
-            action(ctx).map_err(|e| {
-                let msg = match &e {
-                    EngineError::ActionExecutionError(m) => m.clone(),
-                    _ => e.to_string(),
-                };
-                self.trace.push(TraceEvent::ActionFailed {
-                    signal_id: signal_id.to_string(),
-                    action_id: action_id.clone(),
-                    timestamp_ms: now_ms(),
-                    error: msg.clone(),
-                });
-                EngineError::ActionExecutionError(msg)
-            })?;
-            self.trace.push(TraceEvent::ActionSucceeded {
-                signal_id: signal_id.to_string(),
-                action_id: action_id.clone(),
-                timestamp_ms: now_ms(),
-            });
+            Self::run_action(
+                &mut self.trace,
+                &mut self.actions,
+                signal_id,
+                action_id,
+                ctx,
+            )?;
             executed_actions.push(action_id.clone());
         }
 
@@ -198,15 +217,6 @@ impl TopologyEngine {
         });
 
         for action_id in &transition.actions.on_transition {
-            self.trace.push(TraceEvent::ActionStarted {
-                signal_id: signal_id.to_string(),
-                action_id: action_id.clone(),
-                timestamp_ms: now_ms(),
-            });
-            let action = self
-                .actions
-                .get_mut(action_id)
-                .ok_or_else(|| EngineError::ActionNotFound(action_id.clone()))?;
             let ctx = ActionContext {
                 signal_id: signal_id.to_string(),
                 from_state: from_state.clone(),
@@ -214,37 +224,17 @@ impl TopologyEngine {
                 event: event.to_string(),
                 payload: payload.clone(),
             };
-            action(ctx).map_err(|e| {
-                let msg = match &e {
-                    EngineError::ActionExecutionError(m) => m.clone(),
-                    _ => e.to_string(),
-                };
-                self.trace.push(TraceEvent::ActionFailed {
-                    signal_id: signal_id.to_string(),
-                    action_id: action_id.clone(),
-                    timestamp_ms: now_ms(),
-                    error: msg.clone(),
-                });
-                EngineError::ActionExecutionError(msg)
-            })?;
-            self.trace.push(TraceEvent::ActionSucceeded {
-                signal_id: signal_id.to_string(),
-                action_id: action_id.clone(),
-                timestamp_ms: now_ms(),
-            });
+            Self::run_action(
+                &mut self.trace,
+                &mut self.actions,
+                signal_id,
+                action_id,
+                ctx,
+            )?;
             executed_actions.push(action_id.clone());
         }
 
         for action_id in &transition.actions.on_enter {
-            self.trace.push(TraceEvent::ActionStarted {
-                signal_id: signal_id.to_string(),
-                action_id: action_id.clone(),
-                timestamp_ms: now_ms(),
-            });
-            let action = self
-                .actions
-                .get_mut(action_id)
-                .ok_or_else(|| EngineError::ActionNotFound(action_id.clone()))?;
             let ctx = ActionContext {
                 signal_id: signal_id.to_string(),
                 from_state: from_state.clone(),
@@ -252,24 +242,13 @@ impl TopologyEngine {
                 event: event.to_string(),
                 payload: payload.clone(),
             };
-            action(ctx).map_err(|e| {
-                let msg = match &e {
-                    EngineError::ActionExecutionError(m) => m.clone(),
-                    _ => e.to_string(),
-                };
-                self.trace.push(TraceEvent::ActionFailed {
-                    signal_id: signal_id.to_string(),
-                    action_id: action_id.clone(),
-                    timestamp_ms: now_ms(),
-                    error: msg.clone(),
-                });
-                EngineError::ActionExecutionError(msg)
-            })?;
-            self.trace.push(TraceEvent::ActionSucceeded {
-                signal_id: signal_id.to_string(),
-                action_id: action_id.clone(),
-                timestamp_ms: now_ms(),
-            });
+            Self::run_action(
+                &mut self.trace,
+                &mut self.actions,
+                signal_id,
+                action_id,
+                ctx,
+            )?;
             executed_actions.push(action_id.clone());
         }
 

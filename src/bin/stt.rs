@@ -31,7 +31,17 @@ fn main() {
         process::exit(1);
     });
 
-    let mut engine = TopologyEngine::from_json(&topology_json).unwrap_or_else(|e| {
+    let topology_schema: TopologySchema = serde_json::from_str(&topology_json).unwrap_or_else(|e| {
+        eprintln!("Failed to parse topology JSON: {}", e);
+        process::exit(1);
+    });
+
+    let mut action_ids = std::collections::HashSet::new();
+    for trans in &topology_schema.transitions {
+        action_ids.extend(trans.actions.all_actions().into_iter().cloned());
+    }
+
+    let mut engine = TopologyEngine::from_schema(topology_schema).unwrap_or_else(|e| {
         eprintln!("Failed to load topology: {}", e);
         process::exit(1);
     });
@@ -45,16 +55,6 @@ fn main() {
         eprintln!("Failed to parse scenario JSON: {}", e);
         process::exit(1);
     });
-
-    let topology_schema: TopologySchema = serde_json::from_str(&topology_json).unwrap_or_else(|e| {
-        eprintln!("Failed to parse topology JSON: {}", e);
-        process::exit(1);
-    });
-
-    let mut action_ids = std::collections::HashSet::new();
-    for trans in &topology_schema.transitions {
-        action_ids.extend(trans.actions.all_actions().into_iter().cloned());
-    }
 
     for action_id in &action_ids {
         engine.register_action(action_id, |_| Ok(()));

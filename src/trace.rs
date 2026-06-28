@@ -90,6 +90,6 @@ impl TraceLog {
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system time before Unix epoch")
+        .unwrap_or_default()
         .as_millis() as u64
 }
