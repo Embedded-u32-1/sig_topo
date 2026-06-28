@@ -28,4 +28,10 @@ pub enum EngineError {
 
     #[error("Transition blocked by guard '{guard}' for signal '{signal}' on event '{event}'")]
     GuardBlocked { signal: String, event: String, guard: String },
+
+    #[error("Reload error: {0}")]
+    ReloadError(String),
+
+    #[error("Persistence error: {0}")]
+    PersistenceError(String),
 }

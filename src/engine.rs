@@ -25,14 +25,15 @@ pub struct TransitionResult {
 type ActionFn = Box<dyn FnMut(ActionContext) -> Result<(), EngineError> + 'static>;
 
 pub struct TopologyEngine {
-    signals: HashMap<String, SignalState>,
-    transitions: Vec<TransitionDef>,
+    pub(crate) signals: HashMap<String, SignalState>,
+    pub(crate) transitions: Vec<TransitionDef>,
     actions: HashMap<String, ActionFn>,
     trace: TraceLog,
 }
 
-struct SignalState {
-    current: String,
+pub(crate) struct SignalState {
+    pub(crate) current: String,
+    pub(crate) states: Vec<String>,
 }
 
 impl TopologyEngine {
@@ -51,6 +52,7 @@ impl TopologyEngine {
                 sig.id.clone(),
                 SignalState {
                     current: sig.initial_state.clone(),
+                    states: sig.states.clone(),
                 },
             );
         }
@@ -269,6 +271,36 @@ impl TopologyEngine {
             .get(signal_id)
             .ok_or_else(|| EngineError::SignalNotFound(signal_id.to_string()))?;
         Ok(&signal.current)
+    }
+
+    pub fn signal_ids(&self) -> Vec<&str> {
+        self.signals.keys().map(|s| s.as_str()).collect()
+    }
+
+    pub fn reload_topology(&mut self, json_str: &str) -> Result<(), EngineError> {
+        let schema: TopologySchema =
+            serde_json::from_str(json_str).map_err(|e| EngineError::ReloadError(e.to_string()))?;
+        Self::validate(&schema).map_err(|e| EngineError::ReloadError(e.to_string()))?;
+
+        let mut new_signals = HashMap::new();
+        for sig in &schema.signals {
+            let current = self
+                .signals
+                .get(&sig.id)
+                .map(|s| s.current.clone())
+                .unwrap_or_else(|| sig.initial_state.clone());
+            new_signals.insert(
+                sig.id.clone(),
+                SignalState {
+                    current,
+                    states: sig.states.clone(),
+                },
+            );
+        }
+
+        self.signals = new_signals;
+        self.transitions = schema.transitions;
+        Ok(())
     }
 
     pub fn traces(&self) -> &[TraceEvent] {
