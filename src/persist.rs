@@ -33,7 +33,7 @@ impl TopologyEngine {
             let signal = self
                 .signals
                 .get(signal_id)
-                .ok_or_else(|| EngineError::PersistenceError(signal_id.clone()))?;
+                .ok_or_else(|| EngineError::PersistenceError(format!("Unknown signal: {signal_id}")))?;
             if !signal.states.contains(state) {
                 return Err(EngineError::StateNotFound {
                     signal: signal_id.clone(),

@@ -167,3 +167,51 @@ fn test_reload_topology_rejects_invalid_topology() {
     let result = engine.reload_topology(invalid_json);
     assert!(matches!(result, Err(EngineError::ReloadError(_))));
 }
+
+#[test]
+fn test_save_and_load_empty_state() {
+    let json = r#"{
+        "version": "0.1",
+        "signals": [],
+        "transitions": []
+    }"#;
+    let engine = TopologyEngine::from_json(json).expect("Should load valid topology");
+
+    let state_path = temp_state_file("empty_state");
+    engine.save_state(&state_path).expect("Should save empty state");
+
+    let saved = fs::read_to_string(&state_path).expect("Should read saved state");
+    assert_eq!(saved, "{\n  \"states\": {}\n}");
+
+    let mut engine2 = TopologyEngine::from_json(json).expect("Should load valid topology");
+    engine2.load_state(&state_path).expect("Should load empty state");
+    assert!(engine2.signal_ids().is_empty());
+
+    let _ = fs::remove_file(&state_path);
+}
+
+#[test]
+fn test_reload_empty_topology() {
+    let json = r#"{
+        "version": "0.1",
+        "signals": [
+            {"id": "s1", "initial_state": "a", "states": ["a", "b"]}
+        ],
+        "transitions": []
+    }"#;
+    let mut engine = TopologyEngine::from_json(json).expect("Should load valid topology");
+    assert_eq!(engine.get_state("s1").unwrap(), "a");
+
+    let empty_json = r#"{
+        "version": "0.1",
+        "signals": [],
+        "transitions": []
+    }"#;
+
+    engine
+        .reload_topology(empty_json)
+        .expect("Should reload empty topology");
+
+    assert!(engine.get_state("s1").is_err());
+    assert!(engine.signal_ids().is_empty());
+}
