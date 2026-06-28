@@ -5,6 +5,8 @@ pub struct TopologySchema {
     pub version: String,
     pub signals: Vec<SignalDef>,
     pub transitions: Vec<TransitionDef>,
+    #[serde(default)]
+    pub reactions: Vec<ReactionDef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -44,4 +46,13 @@ impl ActionBinding {
         actions.extend(self.on_enter.iter());
         actions
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReactionDef {
+    pub from_signal: String,
+    pub from_state: String,
+    pub to_signal: String,
+    pub event: String,
+    pub payload: Option<serde_json::Value>,
 }

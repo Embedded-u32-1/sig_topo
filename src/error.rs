@@ -34,4 +34,10 @@ pub enum EngineError {
 
     #[error("Persistence error: {0}")]
     PersistenceError(String),
+
+    #[error("Cascade depth exceeded")]
+    CascadeDepthExceeded,
+
+    #[error("Reaction references unknown signal: {0}")]
+    ReactionSignalNotFound(String),
 }
