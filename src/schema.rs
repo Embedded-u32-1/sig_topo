@@ -22,6 +22,8 @@ pub struct TransitionDef {
     pub to: String,
     #[serde(default)]
     pub actions: ActionBinding,
+    #[serde(default)]
+    pub guard: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -22,4 +22,10 @@ pub enum EngineError {
 
     #[error("Action execution error: {0}")]
     ActionExecutionError(String),
+
+    #[error("Guard evaluation error: {0}")]
+    GuardEvaluationError(String),
+
+    #[error("Transition blocked by guard '{guard}' for signal '{signal}' on event '{event}'")]
+    GuardBlocked { signal: String, event: String, guard: String },
 }
