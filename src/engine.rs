@@ -1,5 +1,6 @@
 use crate::error::EngineError;
 use crate::schema::{TopologySchema, TransitionDef};
+use crate::trace::{now_ms, TraceEvent, TraceLog};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -26,6 +27,7 @@ pub struct TopologyEngine {
     signals: HashMap<String, SignalState>,
     transitions: Vec<TransitionDef>,
     actions: HashMap<String, ActionFn>,
+    trace: TraceLog,
 }
 
 struct SignalState {
@@ -53,6 +55,7 @@ impl TopologyEngine {
             signals,
             transitions: schema.transitions,
             actions: HashMap::new(),
+            trace: TraceLog::default(),
         })
     }
 
@@ -118,6 +121,13 @@ impl TopologyEngine {
         event: &str,
         payload: Option<Value>,
     ) -> Result<TransitionResult, EngineError> {
+        self.trace.push(TraceEvent::EventReceived {
+            signal_id: signal_id.to_string(),
+            event: event.to_string(),
+            timestamp_ms: now_ms(),
+            payload: payload.as_ref().map(|v| v.to_string()),
+        });
+
         let signal = self
             .signals
             .get_mut(signal_id)
@@ -141,6 +151,11 @@ impl TopologyEngine {
         let mut executed_actions = Vec::new();
 
         for action_id in &transition.actions.on_exit {
+            self.trace.push(TraceEvent::ActionStarted {
+                signal_id: signal_id.to_string(),
+                action_id: action_id.clone(),
+                timestamp_ms: now_ms(),
+            });
             let action = self
                 .actions
                 .get_mut(action_id)
@@ -157,14 +172,37 @@ impl TopologyEngine {
                     EngineError::ActionExecutionError(m) => m.clone(),
                     _ => e.to_string(),
                 };
+                self.trace.push(TraceEvent::ActionFailed {
+                    signal_id: signal_id.to_string(),
+                    action_id: action_id.clone(),
+                    timestamp_ms: now_ms(),
+                    error: msg.clone(),
+                });
                 EngineError::ActionExecutionError(msg)
             })?;
+            self.trace.push(TraceEvent::ActionSucceeded {
+                signal_id: signal_id.to_string(),
+                action_id: action_id.clone(),
+                timestamp_ms: now_ms(),
+            });
             executed_actions.push(action_id.clone());
         }
 
         signal.current = to_state.clone();
 
+        self.trace.push(TraceEvent::StateChanged {
+            signal_id: signal_id.to_string(),
+            from: from_state.clone(),
+            to: to_state.clone(),
+            timestamp_ms: now_ms(),
+        });
+
         for action_id in &transition.actions.on_transition {
+            self.trace.push(TraceEvent::ActionStarted {
+                signal_id: signal_id.to_string(),
+                action_id: action_id.clone(),
+                timestamp_ms: now_ms(),
+            });
             let action = self
                 .actions
                 .get_mut(action_id)
@@ -181,12 +219,28 @@ impl TopologyEngine {
                     EngineError::ActionExecutionError(m) => m.clone(),
                     _ => e.to_string(),
                 };
+                self.trace.push(TraceEvent::ActionFailed {
+                    signal_id: signal_id.to_string(),
+                    action_id: action_id.clone(),
+                    timestamp_ms: now_ms(),
+                    error: msg.clone(),
+                });
                 EngineError::ActionExecutionError(msg)
             })?;
+            self.trace.push(TraceEvent::ActionSucceeded {
+                signal_id: signal_id.to_string(),
+                action_id: action_id.clone(),
+                timestamp_ms: now_ms(),
+            });
             executed_actions.push(action_id.clone());
         }
 
         for action_id in &transition.actions.on_enter {
+            self.trace.push(TraceEvent::ActionStarted {
+                signal_id: signal_id.to_string(),
+                action_id: action_id.clone(),
+                timestamp_ms: now_ms(),
+            });
             let action = self
                 .actions
                 .get_mut(action_id)
@@ -203,8 +257,19 @@ impl TopologyEngine {
                     EngineError::ActionExecutionError(m) => m.clone(),
                     _ => e.to_string(),
                 };
+                self.trace.push(TraceEvent::ActionFailed {
+                    signal_id: signal_id.to_string(),
+                    action_id: action_id.clone(),
+                    timestamp_ms: now_ms(),
+                    error: msg.clone(),
+                });
                 EngineError::ActionExecutionError(msg)
             })?;
+            self.trace.push(TraceEvent::ActionSucceeded {
+                signal_id: signal_id.to_string(),
+                action_id: action_id.clone(),
+                timestamp_ms: now_ms(),
+            });
             executed_actions.push(action_id.clone());
         }
 
@@ -222,5 +287,17 @@ impl TopologyEngine {
             .get(signal_id)
             .ok_or_else(|| EngineError::SignalNotFound(signal_id.to_string()))?;
         Ok(&signal.current)
+    }
+
+    pub fn traces(&self) -> &[TraceEvent] {
+        self.trace.events()
+    }
+
+    pub fn traces_for(&self, signal_id: &str) -> Vec<&TraceEvent> {
+        self.trace.for_signal(signal_id)
+    }
+
+    pub fn clear_traces(&mut self) {
+        self.trace.clear();
     }
 }
