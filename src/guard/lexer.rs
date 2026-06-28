@@ -101,14 +101,11 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     return Err(format!("Unexpected character: {}", c));
                 }
             }
-            '=' => {
-                if i + 1 < chars.len() && chars[i + 1] == '=' {
-                    tokens.push(Token::Eq);
-                    i += 1;
-                } else {
-                    return Err(format!("Unexpected character: {}", c));
-                }
+            '=' if i + 1 < chars.len() && chars[i + 1] == '=' => {
+                tokens.push(Token::Eq);
+                i += 1;
             }
+            '=' => return Err(format!("Unexpected character: {}", c)),
             _ => return Err(format!("Unexpected character: {}", c)),
         }
         i += 1;

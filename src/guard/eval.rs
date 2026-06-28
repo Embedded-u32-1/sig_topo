@@ -55,16 +55,36 @@ pub fn eval(expr: &Expr, ctx: &ActionContext) -> Result<Value, String> {
             let left_val = eval(left, ctx)?;
             let right_val = eval(right, ctx)?;
             match op {
-                BinaryOp::Add => arithmetic(&left_val, &right_val, |a, b| a + b, |a, b| a + b),
-                BinaryOp::Sub => arithmetic(&left_val, &right_val, |a, b| a - b, |a, b| a - b),
-                BinaryOp::Mul => arithmetic(&left_val, &right_val, |a, b| a * b, |a, b| a * b),
-                BinaryOp::Div => arithmetic(&left_val, &right_val, |a, b| a / b, |a, b| {
-                    if b == 0.0 {
-                        0.0
-                    } else {
-                        a / b
-                    }
-                }),
+                BinaryOp::Add => apply_numeric(
+                    &left_val,
+                    &right_val,
+                    |a, b| a.checked_add(b).ok_or_else(|| "Integer overflow".to_string()),
+                    |a, b| Ok(a + b),
+                ),
+                BinaryOp::Sub => apply_numeric(
+                    &left_val,
+                    &right_val,
+                    |a, b| a.checked_sub(b).ok_or_else(|| "Integer overflow".to_string()),
+                    |a, b| Ok(a - b),
+                ),
+                BinaryOp::Mul => apply_numeric(
+                    &left_val,
+                    &right_val,
+                    |a, b| a.checked_mul(b).ok_or_else(|| "Integer overflow".to_string()),
+                    |a, b| Ok(a * b),
+                ),
+                BinaryOp::Div => apply_numeric(
+                    &left_val,
+                    &right_val,
+                    |a, b| a.checked_div(b).ok_or_else(|| "Division by zero".to_string()),
+                    |a, b| {
+                        if b == 0.0 {
+                            Err("Division by zero".to_string())
+                        } else {
+                            Ok(a / b)
+                        }
+                    },
+                ),
                 BinaryOp::Eq => Ok(Value::Bool(values_equal(&left_val, &right_val))),
                 BinaryOp::Neq => Ok(Value::Bool(!values_equal(&left_val, &right_val))),
                 BinaryOp::Lt => compare(&left_val, &right_val, |ord| ord == std::cmp::Ordering::Less),
@@ -169,17 +189,17 @@ fn value_ordering(a: &Value, b: &Value) -> Result<std::cmp::Ordering, String> {
     }
 }
 
-fn arithmetic(
+fn apply_numeric(
     left: &Value,
     right: &Value,
-    int_op: fn(i64, i64) -> i64,
-    float_op: fn(f64, f64) -> f64,
+    int_op: fn(i64, i64) -> Result<i64, String>,
+    float_op: fn(f64, f64) -> Result<f64, String>,
 ) -> Result<Value, String> {
     match (left, right) {
-        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(int_op(*a, *b))),
-        (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(float_op(*a as f64, *b))),
-        (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(float_op(*a, *b as f64))),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(float_op(*a, *b))),
+        (Value::Integer(a), Value::Integer(b)) => int_op(*a, *b).map(Value::Integer),
+        (Value::Integer(a), Value::Float(b)) => float_op(*a as f64, *b).map(Value::Float),
+        (Value::Float(a), Value::Integer(b)) => float_op(*a, *b as f64).map(Value::Float),
+        (Value::Float(a), Value::Float(b)) => float_op(*a, *b).map(Value::Float),
         _ => Err(format!("Cannot perform arithmetic on {:?} and {:?}", left, right)),
     }
 }

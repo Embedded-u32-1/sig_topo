@@ -107,6 +107,92 @@ fn test_guard_syntax_error_returns_evaluation_error() {
 }
 
 #[test]
+fn test_guard_nested_payload_access() {
+    let json = make_guarded_topology("payload.user.is_admin == true");
+    let mut engine = TopologyEngine::from_json(&json).expect("Should load topology");
+    engine.register_action("mark_processed", |_| Ok(()));
+
+    let blocked = engine
+        .send_event(
+            "payment",
+            "process",
+            Some(json!({"user": {"is_admin": false}})),
+        )
+        .expect_err("Should be blocked");
+    assert!(matches!(blocked, EngineError::GuardBlocked { .. }));
+    assert_eq!(engine.get_state("payment").unwrap(), "pending");
+
+    let result = engine
+        .send_event(
+            "payment",
+            "process",
+            Some(json!({"user": {"is_admin": true}})),
+        )
+        .expect("Transition should succeed");
+    assert_eq!(result.to, "processed");
+}
+
+#[test]
+fn test_guard_null_value_is_false() {
+    let json = make_guarded_topology("payload.amount");
+    let mut engine = TopologyEngine::from_json(&json).expect("Should load topology");
+    engine.register_action("mark_processed", |_| Ok(()));
+
+    let result = engine.send_event("payment", "process", Some(json!({"amount": null})));
+
+    assert!(matches!(result, Err(EngineError::GuardBlocked { .. })));
+    assert_eq!(engine.get_state("payment").unwrap(), "pending");
+}
+
+#[test]
+fn test_guard_type_mismatch_comparison_returns_error() {
+    let json = make_guarded_topology("payload.amount > 'five'");
+    let mut engine = TopologyEngine::from_json(&json).expect("Should load topology");
+
+    let result = engine.send_event("payment", "process", Some(json!({"amount": 10})));
+
+    assert!(matches!(result, Err(EngineError::GuardEvaluationError(_))));
+    assert_eq!(engine.get_state("payment").unwrap(), "pending");
+}
+
+#[test]
+fn test_guard_type_mismatch_arithmetic_returns_error() {
+    let json = make_guarded_topology("payload.amount + '1'");
+    let mut engine = TopologyEngine::from_json(&json).expect("Should load topology");
+
+    let result = engine.send_event("payment", "process", Some(json!({"amount": 10})));
+
+    assert!(matches!(result, Err(EngineError::GuardEvaluationError(_))));
+    assert_eq!(engine.get_state("payment").unwrap(), "pending");
+}
+
+#[test]
+fn test_guard_empty_string_returns_evaluation_error() {
+    let json = make_guarded_topology("");
+    let mut engine = TopologyEngine::from_json(&json).expect("Should load topology");
+
+    let result = engine.send_event("payment", "process", Some(json!({"amount": 100})));
+
+    assert!(matches!(result, Err(EngineError::GuardEvaluationError(_))));
+    assert_eq!(engine.get_state("payment").unwrap(), "pending");
+}
+
+#[test]
+fn test_guard_division_by_zero_returns_error() {
+    let json = make_guarded_topology("payload.amount / payload.divisor > 0");
+    let mut engine = TopologyEngine::from_json(&json).expect("Should load topology");
+
+    let result = engine.send_event(
+        "payment",
+        "process",
+        Some(json!({"amount": 10, "divisor": 0})),
+    );
+
+    assert!(matches!(result, Err(EngineError::GuardEvaluationError(_))));
+    assert_eq!(engine.get_state("payment").unwrap(), "pending");
+}
+
+#[test]
 fn test_no_guard_behavior_unchanged() {
     let json = r#"{
       "version": "0.1",
