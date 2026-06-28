@@ -1,0 +1,56 @@
+{
+  "version": "0.1",
+  "signals": [
+    {
+      "id": "task_status",
+      "initial_state": "idle",
+      "states": ["idle", "running", "success"]
+    },
+    {
+      "id": "ui_indicator",
+      "initial_state": "ready",
+      "states": ["ready", "busy", "done"]
+    }
+  ],
+  "transitions": [
+    {
+      "signal_id": "task_status",
+      "from": "idle",
+      "event": "start",
+      "to": "running"
+    },
+    {
+      "signal_id": "task_status",
+      "from": "running",
+      "event": "finish",
+      "to": "success"
+    },
+    {
+      "signal_id": "ui_indicator",
+      "from": "ready",
+      "event": "set_busy",
+      "to": "busy"
+    },
+    {
+      "signal_id": "ui_indicator",
+      "from": "busy",
+      "event": "set_done",
+      "to": "done"
+    }
+  ],
+  "reactions": [
+    {
+      "from_signal": "task_status",
+      "from_state": "running",
+      "to_signal": "ui_indicator",
+      "event": "set_busy",
+      "payload": { "color": "blue" }
+    },
+    {
+      "from_signal": "task_status",
+      "from_state": "success",
+      "to_signal": "ui_indicator",
+      "event": "set_done"
+    }
+  ]
+}
