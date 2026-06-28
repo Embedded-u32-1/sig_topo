@@ -9,7 +9,10 @@
       "args": [],
       "cwd": "${workspaceFolder}",
       "env": {
-        "RUST_BACKTRACE": "1"
+        "RUST_BACKTRACE": "1",
+        "CARGO_HOME": "/home/uint_0212/.cargo",
+        "RUSTUP_HOME": "/home/uint_0212/.rustup",
+        "PATH": "/home/uint_0212/.cargo/bin:${env:PATH}"
       },
       "sourceLanguages": ["rust"],
       "preLaunchTask": "cargo test build"
