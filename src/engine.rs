@@ -1,10 +1,11 @@
 use crate::error::EngineError;
+use crate::guard::eval_guard;
 use crate::schema::{TopologySchema, TransitionDef};
 use crate::trace::{now_ms, TraceEvent, TraceLog};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ActionContext {
     pub signal_id: String,
     pub from_state: String,
@@ -187,22 +188,38 @@ impl TopologyEngine {
 
         let from_state = signal.current.clone();
         let to_state = transition.to.clone();
+
+        let ctx = ActionContext {
+            signal_id: signal_id.to_string(),
+            from_state: from_state.clone(),
+            to_state: to_state.clone(),
+            event: event.to_string(),
+            payload: payload.clone(),
+        };
+
+        if let Some(guard) = &transition.guard {
+            match eval_guard(guard, &ctx) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(EngineError::GuardBlocked {
+                        signal: signal_id.to_string(),
+                        event: event.to_string(),
+                        guard: guard.clone(),
+                    });
+                }
+                Err(msg) => return Err(EngineError::GuardEvaluationError(msg)),
+            }
+        }
+
         let mut executed_actions = Vec::new();
 
         for action_id in &transition.actions.on_exit {
-            let ctx = ActionContext {
-                signal_id: signal_id.to_string(),
-                from_state: from_state.clone(),
-                to_state: to_state.clone(),
-                event: event.to_string(),
-                payload: payload.clone(),
-            };
             Self::run_action(
                 &mut self.trace,
                 &mut self.actions,
                 signal_id,
                 action_id,
-                ctx,
+                ctx.clone(),
             )?;
             executed_actions.push(action_id.clone());
         }
@@ -217,37 +234,23 @@ impl TopologyEngine {
         });
 
         for action_id in &transition.actions.on_transition {
-            let ctx = ActionContext {
-                signal_id: signal_id.to_string(),
-                from_state: from_state.clone(),
-                to_state: to_state.clone(),
-                event: event.to_string(),
-                payload: payload.clone(),
-            };
             Self::run_action(
                 &mut self.trace,
                 &mut self.actions,
                 signal_id,
                 action_id,
-                ctx,
+                ctx.clone(),
             )?;
             executed_actions.push(action_id.clone());
         }
 
         for action_id in &transition.actions.on_enter {
-            let ctx = ActionContext {
-                signal_id: signal_id.to_string(),
-                from_state: from_state.clone(),
-                to_state: to_state.clone(),
-                event: event.to_string(),
-                payload: payload.clone(),
-            };
             Self::run_action(
                 &mut self.trace,
                 &mut self.actions,
                 signal_id,
                 action_id,
-                ctx,
+                ctx.clone(),
             )?;
             executed_actions.push(action_id.clone());
         }
