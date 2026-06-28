@@ -1,0 +1,38 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug integration tests (CodeLLDB)",
+      "program": "${workspaceFolder}/target/debug/deps/integration_test-20df23f4e9321220",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1"
+      },
+      "sourceLanguages": ["rust"],
+      "preLaunchTask": "cargo test build"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug current test (manual binary)",
+      "program": "${input:testBinary}",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1"
+      },
+      "sourceLanguages": ["rust"],
+      "preLaunchTask": "cargo test build"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "testBinary",
+      "type": "promptString",
+      "description": "Path to the test binary under target/debug/deps/"
+    }
+  ]
+}

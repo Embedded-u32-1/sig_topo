@@ -1,0 +1,29 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cargo test build",
+      "type": "shell",
+      "command": ". \"$HOME/.cargo/env\" && cargo test --no-run",
+      "group": "build",
+      "problemMatcher": ["$rustc"],
+      "detail": "Build tests without running them"
+    },
+    {
+      "label": "cargo build",
+      "type": "shell",
+      "command": ". \"$HOME/.cargo/env\" && cargo build",
+      "group": "build",
+      "problemMatcher": ["$rustc"],
+      "detail": "Build the project"
+    },
+    {
+      "label": "cargo test",
+      "type": "shell",
+      "command": ". \"$HOME/.cargo/env\" && cargo test",
+      "group": "test",
+      "problemMatcher": ["$rustc"],
+      "detail": "Run all tests"
+    }
+  ]
+}
