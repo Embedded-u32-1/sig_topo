@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.9 M21（3392cc8）与 M22（f79acdd）均已收口，进入空闲决策点——下一踏可选 M23 级联失败语义 / 把示例升格为测试 / 其它新方向**。
+当前阶段：**v0.9（M21 3392cc8 + M22 f79acdd）与 v0.10 M23（eb3e910）均收口，示例转录已升格为测试，进入空闲决策点**。
 
 最近完成的工作（M21）：
 
@@ -53,10 +53,18 @@
 2. order_approval / gate_flow 的 EXPECTED 转录目前由文档由人工守住，未升测试；值得在 M23 考虑把它们加进端到端测试（printf event 序列 → 断言 state 字符串）以防文档漂移。
 3. gate_flow .md 的 EXPECTED 转录未逐字 diff 终版输出（仅 order 有完整比对贴在报告）；doc/shell.md 演示转录只引用 order。
 
-### M23：v0.10 级联失败语义文档化 + 测试
+### M23：v0.10 级联失败语义文档化 + 测试 ✅（commit eb3e910）
 
-- 明确：主转移成功 + reaction 触发 → 某一级 cascade 失败 → 已 committed 的上层状态保留。
-- 测试 + 文档（`doc/transaction.md` 补充或独立 `doc/cascade-transaction.md`）。
+- [x] 语义确认：engine 行为符合预期——`signal.current` 在自身生命周期全部成功并写 StateChanged 之后才派发 reaction，子级失败只回滚子级自身，`?` 返回调用方，已 committed 的父/祖先/兄弟信号全部保留。**逐信号原子，跨信号不做分布式回滚**。引擎零改动，未发现 bug。
+- [x] 测试 `tests/cascade_transaction_test.rs`：(A) 深链 A→B→C 叶级失败 → A/B 保留、仅 C 回滚；(A补) trace 含 C 的 ActionFailed + Rollbacked，A/B 无 Rollbacked。(B) 分叉 A→B/D 且 D 失败 → 父 A 与先提交兄弟 B 保留，仅 D 回滚。
+- [x] 把 M22 示例升格 `tests/sts_scenarios_test.rs`：order_approval（guard 阻断 + 三 hook 有序 executed_actions + 终态 ship）、gate_flow（guard 阻断 + * 通配命中含 closed→closed 自环证明 * 非 no-op）。防文档漂移。
+- [x] 文档 `doc/transaction.md` 新增 §「级联失败与已 committed 上层（v0.10，M23）」：语义 + 受测场景 + 边界与已知限制（reaction 短路、已提交半段残留）。
+
+观察（留给后续轮次，不阻塞 M23）：
+
+1. reaction 短路：多个匹配 reaction 按注册顺序派发，首个失败 `?` 跳过后续兄弟；当前是预期行为，注册顺序在部分兄弟可能失败时有意义——业务层应知晓。
+2. 全有或全无（跨信号分布式回滚）仍未支持；业务层通过 guard 补偿。这是语义边界而非 bug。
+3. M21 reserve_inventory 回滚 seam 在 sts 仍为 stub（恒 Ok），M23 测试用独立 fixture 覆盖同一语义，与 example 路径互不干扰。
 
 ### M24：v0.11 WASM 多语言绑定（低优先级，依赖团队跨平台需求再排期）
 
