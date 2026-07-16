@@ -128,5 +128,14 @@ fn format_trace(event: &TraceEvent) -> String {
             "[{}] StateChanged {}: {} -> {}",
             timestamp_ms, signal_id, from, to
         ),
+        TraceEvent::Rollbacked {
+            signal_id,
+            from,
+            to,
+            timestamp_ms,
+        } => format!(
+            "[{}] Rollbacked {}: {} -> {}",
+            timestamp_ms, signal_id, from, to
+        ),
     }
 }

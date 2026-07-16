@@ -95,14 +95,12 @@ fn test_trace_records_action_failure() {
     assert!(result.is_err());
 
     let traces = engine.traces();
-    assert!(traces.iter().any(|e| matches!(
+    // M19: on_transition action failure rolls the state back to the source, so
+    // the signal stays in "idle" and no StateChanged is emitted. The trace keeps
+    // ActionFailed plus a Rollbacked marker for debugging.
+    assert!(traces.iter().all(|e| !matches!(
         e,
-        TraceEvent::StateChanged {
-            signal_id,
-            from,
-            to,
-            ..
-        } if signal_id == "task_status" && from == "idle" && to == "running"
+        TraceEvent::StateChanged { signal_id, .. } if signal_id == "task_status"
     )));
     assert!(traces.iter().any(|e| matches!(
         e,
@@ -113,7 +111,16 @@ fn test_trace_records_action_failure() {
             ..
         } if signal_id == "task_status" && action_id == "init_task_resource" && error == "resource init failed"
     )));
-    assert_eq!(engine.get_state("task_status").unwrap(), "running");
+    assert!(traces.iter().any(|e| matches!(
+        e,
+        TraceEvent::Rollbacked {
+            signal_id,
+            from,
+            to,
+            ..
+        } if signal_id == "task_status" && from == "running" && to == "idle"
+    )));
+    assert_eq!(engine.get_state("task_status").unwrap(), "idle");
 }
 
 #[test]

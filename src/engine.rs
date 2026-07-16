@@ -266,36 +266,71 @@ impl TopologyEngine {
             executed_actions.push(action_id.clone());
         }
 
+        // Tentatively commit the target state so that lifecycle actions read a
+        // consistent `signal.current`, but keep the source state so we can roll
+        // back if any on_transition / on_enter action fails. The trace
+        // `StateChanged` and `Rollbacked` events are the durable record of which
+        // path was taken.
+        let old_state = signal.current.clone();
         signal.current = to_state.clone();
 
+        // Run on_transition / on_enter, capturing the first failure. The action
+        // lifecycle inside `run_action` already pushes `ActionFailed` to the
+        // trace before we return here, so the failure is observable regardless.
+        let mut transition_error = None;
+
+        for action_id in &transition.actions.on_transition {
+            if let Err(e) = Self::run_action(
+                &mut self.trace,
+                &mut self.actions,
+                signal_id,
+                action_id,
+                ctx.clone(),
+            ) {
+                transition_error = Some(e);
+                break;
+            }
+            executed_actions.push(action_id.clone());
+        }
+
+        if transition_error.is_none() {
+            for action_id in &transition.actions.on_enter {
+                if let Err(e) = Self::run_action(
+                    &mut self.trace,
+                    &mut self.actions,
+                    signal_id,
+                    action_id,
+                    ctx.clone(),
+                ) {
+                    transition_error = Some(e);
+                    break;
+                }
+                executed_actions.push(action_id.clone());
+            }
+        }
+
+        if let Some(e) = transition_error {
+            // Roll back to the source state and record the rollback. External
+            // action side effects (IO, logging) are irreversible — this is an
+            // inherent limitation of business actions; the trace keeps
+            // `ActionFailed` + this `Rollbacked` for debugging.
+            signal.current = old_state.clone();
+            self.trace.push(TraceEvent::Rollbacked {
+                signal_id: signal_id.to_string(),
+                from: to_state,
+                to: old_state,
+                timestamp_ms: now_ms(),
+            });
+            return Err(e);
+        }
+
+        // All lifecycle actions succeeded: emit the durable state-change record.
         self.trace.push(TraceEvent::StateChanged {
             signal_id: signal_id.to_string(),
             from: from_state.clone(),
             to: to_state.clone(),
             timestamp_ms: now_ms(),
         });
-
-        for action_id in &transition.actions.on_transition {
-            Self::run_action(
-                &mut self.trace,
-                &mut self.actions,
-                signal_id,
-                action_id,
-                ctx.clone(),
-            )?;
-            executed_actions.push(action_id.clone());
-        }
-
-        for action_id in &transition.actions.on_enter {
-            Self::run_action(
-                &mut self.trace,
-                &mut self.actions,
-                signal_id,
-                action_id,
-                ctx.clone(),
-            )?;
-            executed_actions.push(action_id.clone());
-        }
 
         let result = TransitionResult {
             signal_id: signal_id.to_string(),

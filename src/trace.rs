@@ -30,6 +30,17 @@ pub enum TraceEvent {
         to: String,
         timestamp_ms: u64,
     },
+    /// A state transition was rolled back because a lifecycle action failed.
+    /// `from` is the target state that was tentatively entered then abandoned;
+    /// `to` is the source state the signal was restored to. So the event reads
+    /// "rolled back from `from` to `to`". This variant only appears after an
+    /// `ActionFailed`; a successful transition emits `StateChanged` instead.
+    Rollbacked {
+        signal_id: String,
+        from: String,
+        to: String,
+        timestamp_ms: u64,
+    },
 }
 
 impl TraceEvent {
@@ -40,6 +51,7 @@ impl TraceEvent {
             TraceEvent::ActionSucceeded { signal_id, .. } => signal_id,
             TraceEvent::ActionFailed { signal_id, .. } => signal_id,
             TraceEvent::StateChanged { signal_id, .. } => signal_id,
+            TraceEvent::Rollbacked { signal_id, .. } => signal_id,
         }
     }
 
@@ -50,6 +62,7 @@ impl TraceEvent {
             TraceEvent::ActionSucceeded { timestamp_ms, .. } => *timestamp_ms,
             TraceEvent::ActionFailed { timestamp_ms, .. } => *timestamp_ms,
             TraceEvent::StateChanged { timestamp_ms, .. } => *timestamp_ms,
+            TraceEvent::Rollbacked { timestamp_ms, .. } => *timestamp_ms,
         }
     }
 }
