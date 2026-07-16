@@ -10,10 +10,10 @@
 - **v0.4 守卫表达式**（M7–M9）：语法设计、词法/解析/求值器、引擎集成
 - **v0.5 持久化与热重载**（M10–M12）：状态快照、`save`/`load`、`reload_topology`、`stp` 工具
 - **v0.6 级联信号**（M13–M15）：`ReactionDef`、受控级联执行、深度限制
-- **v0.7 模块化导入**（M16 ✅、M17 ✅）：`ComponentDef`/`InstanceDef`、`expand()` 参数化组件展开、`load_topology` 跨文件导入（循环检测 + 合并并集）、`src/compose.rs`
-- **M16 review 的 2 个 Major 已修复**（commit 965684c）：M1 subst 改为从左到右单次扫描（确定性 + 不二次解释）；M2 MissingBinding 透传真实组件名；附 3 个回归测试
+- **v0.7 模块化导入**（M16 ✅、M17 ✅、M18 ✅）：`ComponentDef`/`InstanceDef`、`expand()` 参数化组件展开、`load_topology` 跨文件导入（循环检测 + 合并并集）、三 CLI 统一接入、示例库、`doc/composition.md`、`README.md`、`src/compose.rs`。验收通过（71 测试绿，house.json 端到端级联跑通）。
+- **M16 review 的 2 个 Major 已修复**（commit 965684c）：M1 subst 改为从左到右单次扫描（确定性 + 不二次解释）；M2 MissingBinding 透传真实组件名；附 3 个回归测试。
 
-原始 MVP 排除清单中，守卫、级联、持久化均已完成；**尚未完成的结构性项目**：模块化导入/组件复用（M18 进行中：CLI/示例/文档）、交互式模拟调试、并发安全/事务回滚、多语言绑定。路线图从这里继续。
+原始 MVP 排除清单中，守卫、级联、持久化、模块化导入均已完成；**正在进行的事务回滚**：v0.8 M19（延迟状态提交）。下一步：v0.9 交互式模拟、v0.11 多语言绑定。路线图从这里继续。
 
 ## 下阶段目标
 
