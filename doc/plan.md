@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.9 M21 已收口（commit 3392cc8），进入 M22（示例场景 + `doc/shell.md`）**。
+当前阶段：**v0.9 M21（3392cc8）与 M22（f79acdd）均已收口，进入空闲决策点——下一踏可选 M23 级联失败语义 / 把示例升格为测试 / 其它新方向**。
 
 最近完成的工作（M21）：
 
@@ -39,11 +39,19 @@
 2. 交互式中"State rolled back to..."打印路径未人肉触发，但底层回滚语义已由 `test_sts_event_command_rolls_back_on_action_failure` 保障。
 3. `load_topology_for_run` 仅从 `schema.transitions` 收集动作，reaction 级联目标 transition 的动作属另一路径；对本 fixture 无遗漏，但复杂 cascade 拓扑下可复核一次。偏 M22 示例场景工作。
 
-### M22：示例场景 + `doc/shell.md`
+### M22：示例场景 + `doc/shell.md` ✅（commit f79acdd）
 
-- [ ] `examples/` 新增演示场景（订单审批、门控流程），可直接被 `sts` 加载跑通。
-- [ ] `doc/shell.md`：安装 / 命令列表 / 调试流程 / 与 `stt` 的区别 / 逐步演示。
-- [ ] `README.md` 补一段"交互式模拟"指引指向 `sts`。
+- [x] `examples/order_approval.json` + `.md`：订单审批，5 状态，guard `payload.amount > 0 and <= 100000` + payload，含 reserve_inventory 回滚缝。
+- [x] `examples/gate_flow.json` + `.md`：门控流程，3 状态，`*` 通配 reset、emergency guard、多动作 on_transition。
+- [x] `doc/shell.md`：安装/命令列表/调试流程/sts vs stt 对比/端到端演示转录。
+- [x] README 补"交互式模拟"段 + doc 列表补 Shell 项。
+- [x] 字段命名核对沿用 tests/topology.json、tests/cascade_topology.json、doc/guards.md；未发明新字段；未改 src/。
+
+观察（留给后续轮次，不阻塞 M22）：
+
+1. 回滚路径是"静态缝"而非"可现场演示"：sts 自动注册的动作恒 Ok，无法真的触发 Rollbacked trace；要看真回滚需 sts 支持注册失败钩子或 `--fail <action>` 参数——超出 M22 范围。doc/shell.md 与两份 .md 都已如实标注。
+2. order_approval / gate_flow 的 EXPECTED 转录目前由文档由人工守住，未升测试；值得在 M23 考虑把它们加进端到端测试（printf event 序列 → 断言 state 字符串）以防文档漂移。
+3. gate_flow .md 的 EXPECTED 转录未逐字 diff 终版输出（仅 order 有完整比对贴在报告）；doc/shell.md 演示转录只引用 order。
 
 ### M23：v0.10 级联失败语义文档化 + 测试
 
