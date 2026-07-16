@@ -1,0 +1,6 @@
+{
+  "version": "0.7",
+  "signals": [{ "id": "solo", "initial_state": "a", "states": ["a","b"] }],
+  "transitions": [],
+  "includes": ["does_not_exist_xxx.json"]
+}

@@ -1,0 +1,10 @@
+{
+  "version": "0.7",
+  "signals": [
+    { "id": "lock", "initial_state": "unlocked", "states": ["locked","unlocked"] }
+  ],
+  "transitions": [
+    { "signal_id": "lock", "from": "unlocked", "event": "lock", "to": "locked" },
+    { "signal_id": "lock", "from": "locked", "event": "unlock", "to": "unlocked" }
+  ]
+}

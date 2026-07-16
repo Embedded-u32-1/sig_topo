@@ -1,0 +1,9 @@
+{
+  "version": "0.7",
+  "signals": [
+    { "id": "same_id", "initial_state": "x", "states": ["x", "y"] }
+  ],
+  "transitions": [
+    { "signal_id": "same_id", "from": "x", "event": "flip", "to": "y" }
+  ]
+}

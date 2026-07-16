@@ -1,0 +1,6 @@
+{
+  "version": "0.7",
+  "signals": [{ "id": "b", "initial_state": "y", "states": ["y"] }],
+  "transitions": [],
+  "includes": ["cycle_a.json"]
+}

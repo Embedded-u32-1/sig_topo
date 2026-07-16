@@ -1,0 +1,9 @@
+{
+  "version": "0.7",
+  "signals": [
+    { "id": "c", "initial_state": "c0", "states": ["c0", "c1"] }
+  ],
+  "transitions": [
+    { "signal_id": "c", "from": "c0", "event": "step", "to": "c1" }
+  ]
+}

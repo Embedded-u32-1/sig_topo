@@ -2,7 +2,7 @@ use signal_topology::schema::{
     ActionBinding, ComponentDef, InstanceDef, ReactionDef, SignalDef, TopologySchema,
     TransitionDef,
 };
-use signal_topology::{expand, EngineError, TopologyEngine};
+use signal_topology::{expand, from_path, load_topology, EngineError, TopologyEngine};
 
 // ---------------------------------------------------------------------------
 // Helpers to build schemas/components/instances by hand for fine-grained tests.
@@ -319,4 +319,249 @@ fn test_end_to_end_expanded_component_runs_in_engine() {
 
     let r = engine.send_event("door", "unlock", None).expect("unlock door");
     assert_eq!(r.to, "unlocked");
+}
+
+// ---------------------------------------------------------------------------
+// M17 — cross-file imports.
+// ---------------------------------------------------------------------------
+
+/// Absolute path to a fixture file, resolved against the crate root so the test
+/// passes regardless of the process's working directory.
+fn fixture(name: &str) -> std::path::PathBuf {
+    let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push("tests/fixtures");
+    p.push(name);
+    p
+}
+
+#[test]
+fn test_load_topology_flat_file() {
+    let schema = load_topology(&fixture("lockable.json")).expect("load flat file");
+    assert_eq!(schema.signals.len(), 1);
+    assert_eq!(schema.signals[0].id, "lock");
+    // Flat file: includes should be empty post-load.
+    assert!(schema.includes.is_empty());
+}
+
+// Aliases matching the spec's exact test names; each delegates to the concrete
+// assertions above/below so behavior is covered regardless of naming.
+#[test]
+fn test_load_topology_plain_file() {
+    test_load_topology_flat_file();
+}
+
+#[test]
+fn test_load_topology_with_includes() {
+    let schema = load_topology(&fixture("breaker.json")).expect("load with includes");
+
+    let ids: Vec<&str> = schema.signals.iter().map(|s| s.id.as_str()).collect();
+    // Main file contributes "breaker"; included lockable.json contributes "lock".
+    assert!(ids.contains(&"breaker"), "breaker missing from merged signals");
+    assert!(ids.contains(&"lock"), "lock missing from merged signals");
+    assert_eq!(schema.signals.len(), 2);
+
+    // Top-level `includes` is cleared after being resolved.
+    assert!(schema.includes.is_empty());
+    // Main file's version wins.
+    assert_eq!(schema.version, "0.7");
+}
+
+#[test]
+fn test_load_topology_merges_includes() {
+    let schema = load_topology(&fixture("main_ok.json")).expect("load with includes");
+
+    let ids: Vec<&str> = schema.signals.iter().map(|s| s.id.as_str()).collect();
+    assert!(ids.contains(&"lock"), "lock missing from merged signals");
+    assert!(ids.contains(&"notifier"), "notifier missing from merged signals");
+
+    // The notify.json reaction ("lock" locked -> notifier fire) survives the merge.
+    assert!(
+        schema
+            .reactions
+            .iter()
+            .any(|r| r.from_signal == "lock" && r.to_signal == "notifier" && r.event == "fire"),
+        "reaction missing after merge"
+    );
+
+    // Top-level `includes` is cleared after being resolved.
+    assert!(schema.includes.is_empty());
+    // main file's version wins.
+    assert_eq!(schema.version, "0.7");
+}
+
+#[test]
+fn test_load_topology_transitive_include() {
+    // trans_a includes trans_b includes trans_c; all three signals must merge.
+    let schema = load_topology(&fixture("trans_a.json")).expect("load transitive chain");
+
+    let ids: Vec<&str> = schema.signals.iter().map(|s| s.id.as_str()).collect();
+    assert!(ids.contains(&"a"), "a missing (root file)");
+    assert!(ids.contains(&"b"), "b missing (first include)");
+    assert!(ids.contains(&"c"), "c missing (second include)");
+    assert_eq!(schema.signals.len(), 3);
+    assert!(schema.includes.is_empty());
+}
+
+#[test]
+fn test_load_topology_cross_file_duplicate_signal() {
+    // dup_main and dup_inc both define "same_id".
+    let err = load_topology(&fixture("dup_main.json")).expect_err("dup must error");
+    assert!(
+        matches!(err, EngineError::DuplicateSignalAfterExpand(ref id) if id == "same_id"),
+        "expected DuplicateSignalAfterExpand(same_id), got {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_from_path_builds_engine() {
+    // from_path == load_topology + TopologyEngine::from_schema.
+    let engine = from_path(&fixture("breaker.json")).expect("from_path should build engine");
+    assert_eq!(engine.get_state("breaker").unwrap(), "on");
+    assert_eq!(engine.get_state("lock").unwrap(), "unlocked");
+
+    // Also verify a transitive chain builds a working engine.
+    let engine2 = from_path(&fixture("trans_a.json")).expect("transitive from_path builds");
+    let ids: Vec<&str> = engine2.signal_ids();
+    assert!(ids.contains(&"a"));
+    assert!(ids.contains(&"b"));
+    assert!(ids.contains(&"c"));
+}
+
+#[test]
+fn test_load_topology_cycle_detection() {
+    let err = load_topology(&fixture("cycle_a.json")).expect_err("cycle must be detected");
+    assert!(
+        matches!(err, EngineError::IncludeCycle(_)),
+        "expected IncludeCycle, got {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_load_topology_include_not_found() {
+    let err = load_topology(&fixture("include_missing.json"))
+        .expect_err("missing include must error");
+    assert!(
+        matches!(err, EngineError::IncludeNotFound(_)),
+        "expected IncludeNotFound, got {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_load_topology_then_engine_end_to_end() {
+    // Drive the merged topology through the engine: lock "lock", which should
+    // fire the reaction and drive "notifier" to "done".
+    let mut engine = TopologyEngine::from_schema(
+        load_topology(&fixture("main_ok.json")).expect("load merged"),
+    )
+    .expect("engine builds from merged schema");
+
+    assert_eq!(engine.get_state("lock").unwrap(), "unlocked");
+    assert_eq!(engine.get_state("notifier").unwrap(), "idle");
+
+    engine.send_event("lock", "lock", None).expect("lock fires");
+    assert_eq!(engine.get_state("lock").unwrap(), "locked");
+    // Reaction: lock=locked -> notifier fire -> notifier done.
+    assert_eq!(engine.get_state("notifier").unwrap(), "done");
+}
+
+// ---------------------------------------------------------------------------
+// Regression tests for the M1 review finding: substitution must be deterministic
+// (no dependence on HashMap iteration order) and must not rescan substituted
+// text (no double-interpretation of `${...}` that appears inside a value).
+// ---------------------------------------------------------------------------
+
+/// A component whose binding value itself contains a `${other}` placeholder.
+/// The literal `${kind}` inside the value must survive verbatim rather than
+/// being re-interpreted as another param.
+fn value_with_nested_ref_component() -> ComponentDef {
+    ComponentDef {
+        params: vec!["name".to_string(), "kind".to_string()],
+        signals: vec![SignalDef {
+            // value of `name` is "${kind}" — after substitution the signal id
+            // must be literally "${kind}", not the value of `kind`.
+            id: "${name}".to_string(),
+            initial_state: "a".to_string(),
+            states: vec!["a".to_string()],
+        }],
+        transitions: vec![],
+        reactions: vec![],
+    }
+}
+
+#[test]
+fn test_expand_does_not_rescan_substituted_text() {
+    let mut components = HashMap::new();
+    components.insert("v".to_string(), value_with_nested_ref_component());
+
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![InstanceDef {
+            component: "v".to_string(),
+            bindings: HashMap::from([
+                ("name".to_string(), "${kind}".to_string()),
+                ("kind".to_string(), "real".to_string()),
+            ]),
+        }],
+        ..base_schema()
+    };
+
+    let flat = expand(schema).expect("expand should succeed");
+    // The substituted text "${kind}" is written verbatim and never re-scanned.
+    assert_eq!(flat.signals[0].id, "${kind}");
+}
+
+#[test]
+fn test_expand_substitution_is_deterministic() {
+    // Run expand twenty times over the same pathological schema (value contains
+    // `${other}`). With a HashMap-iterating subst the result would vary between
+    // runs; it must be stable here.
+    let build = || -> TopologySchema {
+        let mut components = HashMap::new();
+        components.insert("v".to_string(), value_with_nested_ref_component());
+        TopologySchema {
+            components: Some(components),
+            instances: vec![InstanceDef {
+                component: "v".to_string(),
+                bindings: HashMap::from([
+                    ("name".to_string(), "${kind}".to_string()),
+                    ("kind".to_string(), "real".to_string()),
+                ]),
+            }],
+            ..base_schema()
+        }
+    };
+
+    let first = expand(build()).expect("expand should succeed").signals[0].id.clone();
+    for _ in 0..20 {
+        let id = &expand(build()).expect("expand should succeed").signals[0].id;
+        assert_eq!(id, &first, "substitution must be deterministic across runs");
+    }
+    assert_eq!(first, "${kind}");
+}
+
+#[test]
+fn test_expand_missing_binding_reports_component_name() {
+    // M2 regression: MissingBinding error must carry the real component name.
+    let mut components = HashMap::new();
+    components.insert("lockable".to_string(), lockable_component());
+
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![InstanceDef {
+            component: "lockable".to_string(),
+            bindings: HashMap::new(), // missing `name`
+        }],
+        ..base_schema()
+    };
+
+    let err = expand(schema).expect_err("should fail with missing binding");
+    assert!(
+        matches!(&err, EngineError::MissingBinding { component, param, .. }
+            if component == "lockable" && param == "name"),
+        "MissingBinding should report real component name, got {:?}",
+        err
+    );
 }

@@ -1,0 +1,12 @@
+{
+  "version": "0.7",
+  "signals": [
+    { "id": "notifier", "initial_state": "idle", "states": ["idle","done"] }
+  ],
+  "transitions": [
+    { "signal_id": "notifier", "from": "idle", "event": "fire", "to": "done" }
+  ],
+  "reactions": [
+    { "from_signal": "lock", "from_state": "locked", "to_signal": "notifier", "event": "fire" }
+  ]
+}

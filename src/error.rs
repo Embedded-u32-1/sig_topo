@@ -52,4 +52,10 @@ pub enum EngineError {
 
     #[error("Invalid param reference '${param}' in component '{component}' (not in params list)")]
     InvalidParamRef { component: String, param: String },
+
+    #[error("Include file not found: {0}")]
+    IncludeNotFound(String),
+
+    #[error("Cyclic include detected: {0}")]
+    IncludeCycle(String),
 }

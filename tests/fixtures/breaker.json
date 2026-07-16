@@ -1,0 +1,11 @@
+{
+  "version": "0.7",
+  "signals": [
+    { "id": "breaker", "initial_state": "on", "states": ["on", "off"] }
+  ],
+  "transitions": [
+    { "signal_id": "breaker", "from": "on", "event": "trip", "to": "off" },
+    { "signal_id": "breaker", "from": "off", "event": "reset", "to": "on" }
+  ],
+  "includes": ["lockable.json"]
+}
