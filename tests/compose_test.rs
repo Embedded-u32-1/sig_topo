@@ -1,0 +1,322 @@
+use signal_topology::schema::{
+    ActionBinding, ComponentDef, InstanceDef, ReactionDef, SignalDef, TopologySchema,
+    TransitionDef,
+};
+use signal_topology::{expand, EngineError, TopologyEngine};
+
+// ---------------------------------------------------------------------------
+// Helpers to build schemas/components/instances by hand for fine-grained tests.
+// ---------------------------------------------------------------------------
+
+fn signal(id: &str, initial: &str, states: &[&str]) -> SignalDef {
+    SignalDef {
+        id: id.to_string(),
+        initial_state: initial.to_string(),
+        states: states.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+/// A reusable "lockable" component: a signal `${name}` that flips between
+/// `locked`/`unlocked`. Useful for exercising `${name}` in id + state names.
+fn lockable_component() -> ComponentDef {
+    ComponentDef {
+        params: vec!["name".to_string()],
+        signals: vec![signal("${name}", "unlocked", &["locked", "unlocked"])],
+        transitions: vec![
+            TransitionDef {
+                signal_id: "${name}".to_string(),
+                from: "unlocked".to_string(),
+                event: "lock".to_string(),
+                to: "locked".to_string(),
+                actions: ActionBinding::default(),
+                guard: None,
+            },
+            TransitionDef {
+                signal_id: "${name}".to_string(),
+                from: "locked".to_string(),
+                event: "unlock".to_string(),
+                to: "unlocked".to_string(),
+                actions: ActionBinding::default(),
+                guard: None,
+            },
+        ],
+        reactions: vec![],
+    }
+}
+
+/// A component carrying a reaction driven by `${kind}`.
+fn notify_component() -> ComponentDef {
+    ComponentDef {
+        params: vec!["src".to_string(), "kind".to_string()],
+        signals: vec![signal("${kind}", "idle", &["idle", "done"])],
+        transitions: vec![TransitionDef {
+            signal_id: "${kind}".to_string(),
+            from: "idle".to_string(),
+            event: "complete".to_string(),
+            to: "done".to_string(),
+            actions: ActionBinding::default(),
+            guard: None,
+        }],
+        reactions: vec![ReactionDef {
+            from_signal: "${src}".to_string(),
+            from_state: "go".to_string(),
+            to_signal: "${kind}".to_string(),
+            event: "complete".to_string(),
+            payload: None,
+        }],
+    }
+}
+
+use std::collections::HashMap;
+
+fn base_schema() -> TopologySchema {
+    TopologySchema {
+        version: "0.7".to_string(),
+        signals: vec![],
+        transitions: vec![],
+        reactions: vec![],
+        components: None,
+        instances: vec![],
+        includes: vec![],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_expand_single_instance_flattens_signals_and_transitions() {
+    let mut components = HashMap::new();
+    components.insert("lockable".to_string(), lockable_component());
+
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![InstanceDef {
+            component: "lockable".to_string(),
+            bindings: HashMap::from([("name".to_string(), "door".to_string())]),
+        }],
+        ..base_schema()
+    };
+
+    let flat = expand(schema).expect("expand should succeed");
+
+    // components/instances/includes are stripped; signals expanded.
+    assert!(flat.components.is_none());
+    assert!(flat.instances.is_empty());
+    assert_eq!(flat.signals.len(), 1);
+    assert_eq!(flat.signals[0].id, "door");
+    assert_eq!(flat.signals[0].states, vec!["locked", "unlocked"]);
+    assert_eq!(flat.transitions.len(), 2);
+    assert_eq!(flat.transitions[0].to, "locked");
+    assert_eq!(flat.transitions[1].to, "unlocked");
+}
+
+#[test]
+fn test_expand_same_component_twice_with_different_bindings() {
+    let mut components = HashMap::new();
+    components.insert("lockable".to_string(), lockable_component());
+
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![
+            InstanceDef {
+                component: "lockable".to_string(),
+                bindings: HashMap::from([("name".to_string(), "door".to_string())]),
+            },
+            InstanceDef {
+                component: "lockable".to_string(),
+                bindings: HashMap::from([("name".to_string(), "window".to_string())]),
+            },
+        ],
+        ..base_schema()
+    };
+
+    let flat = expand(schema).expect("expand should succeed");
+
+    let ids: Vec<&str> = flat.signals.iter().map(|s| s.id.as_str()).collect();
+    assert!(ids.contains(&"door"));
+    assert!(ids.contains(&"window"));
+    assert_eq!(flat.signals.len(), 2);
+    // Each signal contributes two transitions (lock/unlock).
+    assert_eq!(flat.transitions.len(), 4);
+    assert!(flat.transitions.iter().any(|t| t.signal_id == "door" && t.to == "locked"));
+    assert!(flat.transitions.iter().any(|t| t.signal_id == "window" && t.to == "locked"));
+}
+
+#[test]
+fn test_expand_param_injected_into_state_names() {
+    // Component where the param `${kind}` drives the generated state + id.
+    let mut components = HashMap::new();
+    components.insert("notify".to_string(), notify_component());
+
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![InstanceDef {
+            component: "notify".to_string(),
+            bindings: HashMap::from([
+                ("src".to_string(), "master".to_string()),
+                ("kind".to_string(), "email".to_string()),
+            ]),
+        }],
+        ..base_schema()
+    };
+
+    let flat = expand(schema).expect("expand should succeed");
+
+    assert_eq!(flat.signals[0].id, "email");
+    assert_eq!(flat.signals[0].states, vec!["idle", "done"]);
+    assert_eq!(flat.reactions[0].to_signal, "email");
+    assert_eq!(flat.reactions[0].from_signal, "master");
+}
+
+#[test]
+fn test_expand_missing_binding_returns_error() {
+    let mut components = HashMap::new();
+    components.insert("lockable".to_string(), lockable_component());
+
+    // Missing the required `name` binding.
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![InstanceDef {
+            component: "lockable".to_string(),
+            bindings: HashMap::new(),
+        }],
+        ..base_schema()
+    };
+
+    let err = expand(schema).expect_err("should fail with missing binding");
+    assert!(
+        matches!(err, EngineError::MissingBinding { param, .. } if param == "name")
+    );
+}
+
+#[test]
+fn test_expand_unknown_component_returns_error() {
+    let schema = TopologySchema {
+        components: Some(HashMap::new()),
+        instances: vec![InstanceDef {
+            component: "does_not_exist".to_string(),
+            bindings: HashMap::new(),
+        }],
+        ..base_schema()
+    };
+
+    let err = expand(schema).expect_err("should fail with component not found");
+    assert!(
+        matches!(err, EngineError::ComponentNotFound(name) if name == "does_not_exist")
+    );
+}
+
+#[test]
+fn test_expand_duplicate_signal_after_expand_returns_error() {
+    let mut components = HashMap::new();
+    components.insert("lockable".to_string(), lockable_component());
+
+    // Two instances resolve to the same signal id "door".
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![
+            InstanceDef {
+                component: "lockable".to_string(),
+                bindings: HashMap::from([("name".to_string(), "door".to_string())]),
+            },
+            InstanceDef {
+                component: "lockable".to_string(),
+                bindings: HashMap::from([("name".to_string(), "door".to_string())]),
+            },
+        ],
+        ..base_schema()
+    };
+
+    let err = expand(schema).expect_err("should fail with duplicate signal");
+    assert!(
+        matches!(err, EngineError::DuplicateSignalAfterExpand(id) if id == "door")
+    );
+}
+
+#[test]
+fn test_expand_empty_instances_preserves_schema() {
+    let mut schema = base_schema();
+    schema.signals.push(signal("s1", "a", &["a", "b"]));
+    // include components + includes to verify they are preserved on no-op path.
+    schema.components = Some(HashMap::new());
+    schema.includes.push("other.json".to_string());
+
+    let out = expand(schema).expect("no-op expand should succeed");
+    assert_eq!(out.signals.len(), 1);
+    assert_eq!(out.signals[0].id, "s1");
+    // No-op path keeps the original fields intact.
+    assert!(out.components.is_some());
+    assert_eq!(out.includes, vec!["other.json".to_string()]);
+}
+
+#[test]
+fn test_expand_invalid_param_ref_returns_error() {
+    // Component references `${extra}` which is not declared in `params`.
+    let bad = ComponentDef {
+        params: vec!["name".to_string()],
+        signals: vec![signal("${extra}", "a", &["a"])],
+        transitions: vec![],
+        reactions: vec![],
+    };
+
+    let mut components = HashMap::new();
+    components.insert("bad".to_string(), bad);
+
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![InstanceDef {
+            component: "bad".to_string(),
+            bindings: HashMap::from([("name".to_string(), "x".to_string())]),
+        }],
+        ..base_schema()
+    };
+
+    let err = expand(schema).expect_err("should fail with invalid param ref");
+    assert!(
+        matches!(err, EngineError::InvalidParamRef { param, .. } if param == "extra")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end: expand then drive the engine through the generated topology.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_end_to_end_expanded_component_runs_in_engine() {
+    let mut components = HashMap::new();
+    components.insert("lockable".to_string(), lockable_component());
+
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![
+            InstanceDef {
+                component: "lockable".to_string(),
+                bindings: HashMap::from([("name".to_string(), "door".to_string())]),
+            },
+            InstanceDef {
+                component: "lockable".to_string(),
+                bindings: HashMap::from([("name".to_string(), "window".to_string())]),
+            },
+        ],
+        ..base_schema()
+    };
+
+    let mut engine = TopologyEngine::from_schema(schema).expect("engine should load expanded schema");
+
+    assert_eq!(engine.get_state("door").unwrap(), "unlocked");
+    assert_eq!(engine.get_state("window").unwrap(), "unlocked");
+
+    let r = engine.send_event("door", "lock", None).expect("lock door");
+    assert_eq!(r.to, "locked");
+    assert_eq!(engine.get_state("door").unwrap(), "locked");
+    // window unaffected by door's transition
+    assert_eq!(engine.get_state("window").unwrap(), "unlocked");
+
+    let r = engine.send_event("window", "lock", None).expect("lock window");
+    assert_eq!(r.to, "locked");
+
+    let r = engine.send_event("door", "unlock", None).expect("unlock door");
+    assert_eq!(r.to, "unlocked");
+}

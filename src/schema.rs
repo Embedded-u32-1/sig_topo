@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TopologySchema {
@@ -7,6 +8,28 @@ pub struct TopologySchema {
     pub transitions: Vec<TransitionDef>,
     #[serde(default)]
     pub reactions: Vec<ReactionDef>,
+    #[serde(default)]
+    pub components: Option<HashMap<String, ComponentDef>>,
+    #[serde(default)]
+    pub instances: Vec<InstanceDef>,
+    // M17: cross-file import (field added in M16; parsing implemented in M17).
+    #[serde(default)]
+    pub includes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ComponentDef {
+    pub params: Vec<String>,
+    pub signals: Vec<SignalDef>,
+    pub transitions: Vec<TransitionDef>,
+    #[serde(default)]
+    pub reactions: Vec<ReactionDef>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct InstanceDef {
+    pub component: String,
+    pub bindings: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

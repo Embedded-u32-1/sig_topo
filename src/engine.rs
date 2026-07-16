@@ -46,6 +46,11 @@ impl TopologyEngine {
     }
 
     pub fn from_schema(schema: TopologySchema) -> Result<Self, EngineError> {
+        // Expand parameterized components/instances into a flat schema before
+        // validation. When `instances` is empty this is a no-op pass-through,
+        // so legacy flat JSON keeps working unchanged.
+        let schema = crate::compose::expand(schema)?;
+
         Self::validate(&schema)?;
 
         let mut signals = HashMap::new();

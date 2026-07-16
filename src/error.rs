@@ -40,4 +40,16 @@ pub enum EngineError {
 
     #[error("Reaction references unknown signal: {0}")]
     ReactionSignalNotFound(String),
+
+    #[error("Component not found: {0}")]
+    ComponentNotFound(String),
+
+    #[error("Missing binding for param '{param}' in component '{component}'")]
+    MissingBinding { component: String, param: String },
+
+    #[error("Duplicate signal id after expand: {0}")]
+    DuplicateSignalAfterExpand(String),
+
+    #[error("Invalid param reference '${param}' in component '{component}' (not in params list)")]
+    InvalidParamRef { component: String, param: String },
 }
