@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use signal_topology::schema::TopologySchema;
+use signal_topology::load_topology;
 use signal_topology::TopologyEngine;
 use std::{env, fs, path::Path, process};
 
@@ -48,7 +48,7 @@ fn main() {
 }
 
 fn cmd_save(topology_path: &str, scenario_path: &str, state_path: &str) {
-    let mut engine = load_topology(topology_path);
+    let mut engine = load_topology_for_run(topology_path);
 
     let scenario_json = fs::read_to_string(scenario_path).unwrap_or_else(|e| {
         eprintln!("Failed to read scenario '{}': {}", scenario_path, e);
@@ -77,7 +77,7 @@ fn cmd_save(topology_path: &str, scenario_path: &str, state_path: &str) {
 }
 
 fn cmd_reload(topology_path: &str, new_topology_path: &str, state_path: &str) {
-    let mut engine = load_topology(topology_path);
+    let mut engine = load_topology_for_run(topology_path);
 
     if let Err(e) = engine.load_state(Path::new(state_path)) {
         eprintln!("Failed to load state '{}': {}", state_path, e);
@@ -101,23 +101,22 @@ fn cmd_reload(topology_path: &str, new_topology_path: &str, state_path: &str) {
     println!("Topology reloaded and state saved to {}", state_path);
 }
 
-fn load_topology(topology_path: &str) -> TopologyEngine {
-    let topology_json = fs::read_to_string(topology_path).unwrap_or_else(|e| {
-        eprintln!("Failed to read topology '{}': {}", topology_path, e);
-        process::exit(1);
-    });
-
-    let topology_schema: TopologySchema = serde_json::from_str(&topology_json).unwrap_or_else(|e| {
-        eprintln!("Failed to parse topology JSON: {}", e);
+/// Load a topology file into a ready-to-run engine. Resolves `includes` and
+/// expands `instances` via `load_topology`, collects action ids from the
+/// *expanded* transitions (so component-defined actions are registered too),
+/// builds the engine, and registers every action with a no-op handler.
+fn load_topology_for_run(topology_path: &str) -> TopologyEngine {
+    let schema = load_topology(Path::new(topology_path)).unwrap_or_else(|e| {
+        eprintln!("Failed to load topology '{}': {}", topology_path, e);
         process::exit(1);
     });
 
     let mut action_ids = std::collections::HashSet::new();
-    for trans in &topology_schema.transitions {
+    for trans in &schema.transitions {
         action_ids.extend(trans.actions.all_actions().into_iter().cloned());
     }
 
-    let mut engine = TopologyEngine::from_schema(topology_schema).unwrap_or_else(|e| {
+    let mut engine = TopologyEngine::from_schema(schema).unwrap_or_else(|e| {
         eprintln!("Failed to load topology: {}", e);
         process::exit(1);
     });

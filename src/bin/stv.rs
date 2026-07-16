@@ -1,4 +1,5 @@
 use signal_topology::export::to_dot;
+use signal_topology::load_topology;
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -18,16 +19,13 @@ fn main() {
         .unwrap_or("topology");
     let parent = input_path.parent().unwrap_or_else(|| Path::new("."));
 
-    let json = fs::read_to_string(input_path).unwrap_or_else(|e| {
-        eprintln!("Failed to read '{}': {}", input_path.display(), e);
+    // load_topology resolves `includes` (relative to the file's parent
+    // directory, with cycle detection) and expands parameterized
+    // `instances`, returning a fully flat TopologySchema ready to render.
+    let schema = load_topology(input_path).unwrap_or_else(|e| {
+        eprintln!("Failed to load topology '{}': {}", input_path.display(), e);
         std::process::exit(1);
     });
-
-    let schema: signal_topology::schema::TopologySchema = serde_json::from_str(&json)
-        .unwrap_or_else(|e| {
-            eprintln!("Failed to parse topology JSON: {}", e);
-            std::process::exit(1);
-        });
 
     let dot = to_dot(&schema);
     let dot_path = parent.join(format!("{}.dot", input_stem));

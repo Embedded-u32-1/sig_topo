@@ -1,0 +1,33 @@
+{
+  "version": "0.7",
+  "signals": [
+    {
+      "id": "breaker",
+      "initial_state": "running",
+      "states": ["running", "stopped"]
+    }
+  ],
+  "transitions": [
+    {
+      "signal_id": "breaker",
+      "from": "running",
+      "event": "stop",
+      "to": "stopped"
+    },
+    {
+      "signal_id": "breaker",
+      "from": "stopped",
+      "event": "start",
+      "to": "running"
+    }
+  ],
+  "reactions": [
+    {
+      "from_signal": "gate",
+      "from_state": "locked",
+      "to_signal": "breaker",
+      "event": "stop"
+    }
+  ],
+  "includes": ["lockable.json"]
+}

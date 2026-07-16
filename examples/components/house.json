@@ -1,0 +1,69 @@
+{
+  "version": "0.7",
+  "signals": [
+    {
+      "id": "controller",
+      "initial_state": "idle",
+      "states": ["idle", "alerted"]
+    }
+  ],
+  "transitions": [
+    {
+      "signal_id": "controller",
+      "from": "idle",
+      "event": "notify",
+      "to": "alerted"
+    },
+    {
+      "signal_id": "controller",
+      "from": "alerted",
+      "event": "reset",
+      "to": "idle"
+    }
+  ],
+  "reactions": [
+    {
+      "from_signal": "door",
+      "from_state": "locked",
+      "to_signal": "controller",
+      "event": "notify"
+    }
+  ],
+  "components": {
+    "lockable": {
+      "params": ["name"],
+      "signals": [
+        {
+          "id": "${name}",
+          "initial_state": "unlocked",
+          "states": ["locked", "unlocked"]
+        }
+      ],
+      "transitions": [
+        {
+          "signal_id": "${name}",
+          "from": "unlocked",
+          "event": "lock",
+          "to": "locked"
+        },
+        {
+          "signal_id": "${name}",
+          "from": "locked",
+          "event": "unlock",
+          "to": "unlocked"
+        }
+      ]
+    }
+  },
+  "instances": [
+    {
+      "component": "lockable",
+      "bindings": { "name": "door" }
+    },
+    {
+      "component": "lockable",
+      "bindings": { "name": "window" }
+    }
+  ],
+  "includes": ["lockable.json"]
+}

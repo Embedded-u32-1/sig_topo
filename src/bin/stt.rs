@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use signal_topology::schema::TopologySchema;
+use signal_topology::load_topology;
 use signal_topology::trace::TraceEvent;
 use signal_topology::TopologyEngine;
 use std::{env, fs, process};
@@ -26,25 +26,7 @@ fn main() {
     let topology_path = &args[1];
     let scenario_path = &args[2];
 
-    let topology_json = fs::read_to_string(topology_path).unwrap_or_else(|e| {
-        eprintln!("Failed to read topology '{}': {}", topology_path, e);
-        process::exit(1);
-    });
-
-    let topology_schema: TopologySchema = serde_json::from_str(&topology_json).unwrap_or_else(|e| {
-        eprintln!("Failed to parse topology JSON: {}", e);
-        process::exit(1);
-    });
-
-    let mut action_ids = std::collections::HashSet::new();
-    for trans in &topology_schema.transitions {
-        action_ids.extend(trans.actions.all_actions().into_iter().cloned());
-    }
-
-    let mut engine = TopologyEngine::from_schema(topology_schema).unwrap_or_else(|e| {
-        eprintln!("Failed to load topology: {}", e);
-        process::exit(1);
-    });
+    let mut engine = load_topology_for_run(topology_path);
 
     let scenario_json = fs::read_to_string(scenario_path).unwrap_or_else(|e| {
         eprintln!("Failed to read scenario '{}': {}", scenario_path, e);
@@ -55,10 +37,6 @@ fn main() {
         eprintln!("Failed to parse scenario JSON: {}", e);
         process::exit(1);
     });
-
-    for action_id in &action_ids {
-        engine.register_action(action_id, |_| Ok(()));
-    }
 
     for ev in &scenario.events {
         if let Err(e) = engine.send_event(&ev.signal_id, &ev.event, ev.payload.clone()) {
@@ -73,6 +51,33 @@ fn main() {
     for event in engine.traces() {
         println!("{}", format_trace(event));
     }
+}
+
+/// Load a topology file into a ready-to-run engine. Resolves `includes` and
+/// expands `instances` via `load_topology`, collects action ids from the
+/// *expanded* transitions (so component-defined actions are registered too),
+/// builds the engine, and registers every action with a no-op handler.
+fn load_topology_for_run(topology_path: &str) -> TopologyEngine {
+    let schema = load_topology(std::path::Path::new(topology_path)).unwrap_or_else(|e| {
+        eprintln!("Failed to load topology '{}': {}", topology_path, e);
+        process::exit(1);
+    });
+
+    let mut action_ids = std::collections::HashSet::new();
+    for trans in &schema.transitions {
+        action_ids.extend(trans.actions.all_actions().into_iter().cloned());
+    }
+
+    let mut engine = TopologyEngine::from_schema(schema).unwrap_or_else(|e| {
+        eprintln!("Failed to load topology: {}", e);
+        process::exit(1);
+    });
+
+    for action_id in &action_ids {
+        engine.register_action(action_id, |_| Ok(()));
+    }
+
+    engine
 }
 
 fn format_trace(event: &TraceEvent) -> String {
