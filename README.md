@@ -23,6 +23,14 @@ cargo run --bin stv -- examples/components/house.json
 
 `house.json` demonstrates composition: parameterized components, instances, and cross-file includes are all resolved before the engine runs. See [doc/composition.md](doc/composition.md).
 
+# Interactive simulation
+
+```bash
+cargo run --bin sts -- examples/order_approval.json
+```
+
+`sts` (signal-topology-shell) loads a topology and drops you into a REPL where you can send events, inspect state, and print the trace log one step at a time. Walk-throughs: [examples/order_approval.md](examples/order_approval.md), [examples/gate_flow.md](examples/gate_flow.md). Full command reference: [doc/shell.md](doc/shell.md).
+
 ## Modules
 
 | Module      | Purpose |
@@ -43,6 +51,7 @@ cargo run --bin stv -- examples/components/house.json
 - [Persistence](doc/persistence.md) — saving, restoring, and reloading state with `stp`.
 - [Tracing](doc/tracing.md) — the trace log and event lifecycle.
 - [Composition](doc/composition.md) — components, instances, and includes (v0.7).
+- [Shell](doc/shell.md) — the `sts` interactive REPL (commands, debugging, end-to-end demo).
 - [Roadmap](doc/roadmap.md) — milestone history and upcoming direction.
 
 ## Tests

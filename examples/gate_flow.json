@@ -1,0 +1,63 @@
+{
+  "version": "0.1",
+  "signals": [
+    {
+      "id": "gate",
+      "initial_state": "closed",
+      "states": ["closed", "open", "fault"]
+    }
+  ],
+  "transitions": [
+    {
+      "signal_id": "gate",
+      "from": "closed",
+      "event": "open",
+      "to": "open",
+      "actions": {
+        "on_transition": ["activate_motor"],
+        "on_enter": ["log_gate_open"]
+      }
+    },
+    {
+      "signal_id": "gate",
+      "from": "open",
+      "event": "close",
+      "to": "closed",
+      "actions": {
+        "on_transition": ["deactivate_motor"],
+        "on_enter": ["log_gate_closed"]
+      }
+    },
+    {
+      "signal_id": "gate",
+      "from": "open",
+      "event": "fault",
+      "to": "fault",
+      "guard": "payload.emergency == true",
+      "actions": {
+        "on_transition": ["engage_brake", "raise_alarm"],
+        "on_enter": ["log_fault"]
+      }
+    },
+    {
+      "signal_id": "gate",
+      "from": "*",
+      "event": "reset",
+      "to": "closed",
+      "actions": {
+        "on_transition": ["clear_fault_safely"],
+        "on_enter": ["log_reset"]
+      }
+    },
+    {
+      "signal_id": "gate",
+      "from": "fault",
+      "event": "repair",
+      "to": "closed",
+      "actions": {
+        "on_transition": ["run_diagnostics", "clear_fault_safely"],
+        "on_enter": ["log_repair"]
+      }
+    }
+  ]
+}
