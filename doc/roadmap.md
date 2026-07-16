@@ -13,7 +13,7 @@
 - **v0.7 模块化导入**（M16 ✅、M17 ✅、M18 ✅）：`ComponentDef`/`InstanceDef`、`expand()` 参数化组件展开、`load_topology` 跨文件导入（循环检测 + 合并并集）、三 CLI 统一接入、示例库、`doc/composition.md`、`README.md`、`src/compose.rs`。验收通过（71 测试绿，house.json 端到端级联跑通）。
 - **M16 review 的 2 个 Major 已修复**（commit 965684c）：M1 subst 改为从左到右单次扫描（确定性 + 不二次解释）；M2 MissingBinding 透传真实组件名；附 3 个回归测试。
 
-原始 MVP 排除清单中，守卫、级联、持久化、模块化导入均已完成；**事务回滚**：v0.8 M19 ✅（延迟状态提交 + 回滚）、M20 ✅（transaction_test + doc/transaction.md）。**正在进行**：v0.9 M21（sts 交互式 REPL）。下一步：v0.11 多语言绑定。路线图从这里继续。
+原始 MVP 排除清单中，守卫、级联、持久化、模块化导入均已完成；**事务回滚**：v0.8 M19 ✅（延迟状态提交 + 回滚）、M20 ✅（transaction_test + doc/transaction.md）；**交互式模拟**：v0.9 M21 ✅（sts REPL，commit 3392cc8）、M22 ✅（示例场景 + doc/shell.md，commit f79acdd）；**级联事务扩展**：v0.10 M23 ✅（级联失败语义 + 测试 + doc/transaction.md，commit eb3e910）。**正在进行**：无。下一步：v0.11 M24 WASM 多语言绑定（低优先级，依赖团队跨平台需求再排期）。路线图从这里继续。
 
 ## 下阶段目标
 
