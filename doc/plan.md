@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.14 全收口（M38–M40 ✅，195 测试绿，0.4.0）。空闲决策点后，经判断启动 v0.15 新方向：guard 可观测性与调试。M41 起由 agent 逐步实现。**
+当前阶段：**v0.15 M41 ✅（guard 调试器，commit 40ea958，201 测试绿）；下一步 M42（snapshot_dot 增强）。**
 
 最近完成的工作（M33）：
 
@@ -217,7 +217,7 @@ reaction {
 
 - 具体实现与端到端审核：委托子代理（Agent）。
 - 本进程负责：路线判断、计划记录、提交计划文档、按代理反馈把新事实更新到本计划。
-- 当前：M38 ✅ M39 ✅；下一步委托 M40（收口：version 0.4.0 + doc-comments 复核）。
+- 当前：M41 ✅；下一步委托 M42（snapshot_dot 增强）。
 
 ### M28 收口观察（留给后续轮次，不阻塞 M28）
 
@@ -499,7 +499,7 @@ v0.14（M38 reaction guard 复合语义 + M39 guard demo + stc --check 增强 + 
 
 **节奏**：M41 guard 调试器（sts `why` 命令 + guard trace 可视化）→ M42 snapshot_dot 增强（标出 guard-blocked reaction）→ M43 收口。
 
-### M41：v0.15 guard 调试器 —— 设计 + 实现（本轮起）
+### M41：v0.15 guard 调试器 ✅（commit 40ea958）
 
 **目标**：让用户在 sts REPL 内定位「为什么这条 reaction 没触发」。
 
@@ -525,7 +525,7 @@ v0.14（M38 reaction guard 复合语义 + M39 guard demo + stc --check 增强 + 
 2. 195 测试零回归 + clippy 零警告。
 3. `doc/shell.md` 补 `why` 命令说明 + 示例转录。
 
-### M42：snapshot_dot 增强（标出 guard-blocked reaction）
+### M42：snapshot_dot 增强（标出 guard-blocked reaction）—— 下一步
 
 **目标**：在 DOT 图中可视化 reaction guard 阻断。
 
