@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.9（M21 3392cc8 + M22 f79acdd）、v0.10 M23（eb3e910）、自定 M25（b6aac90）均收口；sts 交互模拟器已完整（含回滚现场演示 + 命令解析可测化）。进入空闲决策点。**
+当前阶段：**v0.9（M21 3392cc8 + M22 f7acdd）、v0.10 M23（eb3e910）、自定 M25（b6aac90）、自定 M26（ed16f15）均收口；模拟调试层（sts 交互式 + stt scenario 回放）完整覆盖回滚演示，sts/stt 重复代码已抽出共享。进入空闲决策点。**
 
 最近完成的工作（M21）：
 
@@ -80,6 +80,23 @@
 
 1. `order_approval.json` 的 `approve` 只能从 `submitted` 触发，无法在同一信号上「成功→fail→再 approve」原样复现；转录据实写成「submit→fail→approve 回滚→reset→approve 成功」。若要更顺手的教学流，可给示例拓扑补一个逆向转移（示例改动，不影响引擎/测试）。
 2. fail_set 是进程内 Rc<RefCell>；未来若要在 stt scenario 层声明「某步某动作失败」，可把它抽到 schema fixture 层——超出 M25，且触及测试/engine 边界，先不动。
+
+### M26：stt 失败注入 + sts/stt 共享 helpers 抽出 lib（自定，本轮）
+
+想法起点"模拟调试"要完整：sts(交互式) 现已能现场演示回滚(M25)，但 stt(scenario 回放) 还不行——其 `load_topology_for_run` 注册 no-op 处理器，scenario 回放永远成功、无回滚可观察。同时 sts/stt 各有一份 `load_topology_for_run` + `format_trace`（重复）。
+
+- [x] 共享 helpers 抽出：新建 `src/run.rs`（pub mod run），抽出 `Scenario`/`ScenarioEvent`(含可选 `fail_actions`)、`collect_action_ids`、`register_actions(engine, ids, fail_set, record)`、`load_topology_for_run(path, fail_set, record)`、`run_scenario(engine, scenario, fail_set)`、`format_trace`。sts.rs 净删 113 行、stt.rs 净删约 120 行重复。
+- [x] stt 失败注入：scenario 每个事件可选 `fail_actions: Vec<String>`（#[serde(default)]，零破坏）；per-event 作用域（事件前注入 fail_set、事件后清除）；失败语义改为「记录+继续」(stderr 报告回滚态 + 继续下一事件)，与 sts "回滚+等下一命令" 一致。复用 M25 同套 fail_set 机制。引擎零改动。
+- [x] 测试：src/run.rs 单元测试 3 个（去重/format/空集）；tests/stt_fail_scenario_test.rs 集成测试 3 个（成功回归 / 注入失败回滚并继续 / per-event 作用域）；fixture scenario 2 个（scenario_success.json / scenario_fail_inject.json）。总测试从 94 → 100，全绿。
+- [x] doc：doc/shell.md 新增「stt scenario format + failure injection」节。
+- [x] 提交 `ed16f15`：8 files / +578 / −223。
+
+观察（留给后续轮次，不阻塞 M26）：
+
+1. run_scenario 失败报告委托给调用方（stt 打 stderr），无返回码/非零退出。若 stt 被 CI 用作回归工具，可考虑"有任何注入失败时 exit(1)"——但 guard-blocked 等预期失败不应算，语义需再定义。
+2. fail_actions 若列出不存在的 action id 会报 ActionNotFound 而非 ActionExecutionError，行为不同；可在 stt 加 fixture 校验（防 typo），本轮未做。
+3. src/run.rs 是 pub mod 暴露为库表面，文档注释已说明是 bin 共享脚手架非稳定 API；未来可收敛为 pub(crate)。
+4. 实跑中发现并修复 bug：错误态应在该事件发生时立即捕获存入 ScenarioError，否则会被后续事件覆盖。
 
 ### M24：v0.11 WASM 多语言绑定（低优先级，依赖团队跨平台需求再排期，暂不排）
 
