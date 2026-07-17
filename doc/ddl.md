@@ -268,3 +268,58 @@ parser validates incrementally and stops at the first problem, so fix them one
 at a time. Guard-syntax mistakes surface only when the **engine** evaluates the
 guard at runtime (as `GuardEvaluationError` / `GuardBlocked`), since the DDL
 compiler passes guards through verbatim.
+
+## Linting with `stc --check`
+
+`stc` accepts an optional `--check` flag that runs semantic checks over the
+compiled topology **before** the JSON is emitted. It prints any warnings to
+stderr and writes the JSON as usual — warnings are **non-blocking** (they never
+abort the run and never change the exit code):
+
+```
+stc [--check] <input.ddl> [output.json]
+#   no output path  -> pretty JSON on stdout (+ warnings on stderr)
+#   output path     -> JSON to the file, `Compiled ...` on stdout, warnings on stderr
+```
+
+The checks are pure functions of the compiled `TopologySchema` (see
+`src/check.rs`); they do not depend on the DDL AST, so they tolerate the
+compiler's lowering faithfully.
+
+### Checks
+
+| Warning              | What it means                                                                              | Example                                                                                       |
+|----------------------|--------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
+| `self-loop`          | A transition with `from == to`; the engine stays in the same state.                        | `gate_flow`'s `on reset from * -> closed` lowers to a `closed -> closed` self-loop (harmless, but worth knowing). |
+| `unreachable-state`  | A signal state that is neither the initial state nor any other state's `to` target — dead. | An `obsolete` state that no transition ever enters.                                           |
+
+The `--check` output format:
+
+```
+Warning: self-loop: gate: closed -> closed
+1 warning(s) found.
+```
+
+### Exit code
+
+Warnings are informational only: `stc --check` always exits `0` when the
+DDL compiles. Only a **compile error** (syntax, validation) exits non-zero.
+Use `--check` with no output path for a lint-only run:
+
+```
+cargo run --bin stc -- --check path/to/file.ddl
+```
+
+### How to read a self-loop warning
+
+A self-loop is not always a mistake. Two common sources:
+
+- **Literal self-loop** — you wrote `on ev from a -> a` directly.
+- **Wildcard lowering** — `on ev from * -> x` expands to one transition per
+  source state, producing an `x -> x` arm when `x` is itself a state. The
+  compiler emits `from`/`to` as concrete state names, so the schema alone
+  cannot tell these apart; `--check` reports the `from == to` pair either way.
+
+If the self-loop is intentional (the `gate_flow` reset is), ignore the warning.
+If it is not, either remove the arm or rewrite the wildcard so its `to` is not
+in the source-state set.

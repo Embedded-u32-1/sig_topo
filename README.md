@@ -37,6 +37,13 @@ cargo run --bin stc -- <in.ddl> [out.json]
 
 `stc` (signal-topology-compiler) compiles a `.ddl` [Domain Description Language](doc/ddl.md) source file into the engine's JSON topology schema. With no output path the JSON is printed to stdout.
 
+```bash
+# Lint a .ddl for suspicious patterns (self-loops, unreachable states)
+cargo run --bin stc -- --check <in.ddl>
+```
+
+`stc --check` prints non-blocking warnings to stderr and still writes the JSON — warnings never abort the run or change the exit code. See [doc/ddl.md](doc/ddl.md) "Linting with `stc --check`".
+
 `sts` (signal-topology-shell) loads a topology and drops you into a REPL where you can send events, inspect state, and print the trace log one step at a time. Walk-throughs: [examples/order_approval.md](examples/order_approval.md), [examples/gate_flow.md](examples/gate_flow.md). Full command reference: [doc/shell.md](doc/shell.md).
 
 ## Modules

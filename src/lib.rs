@@ -31,6 +31,11 @@
 //! state to JSON (`persist`), and records an ordered trace log of every event
 //! and action lifecycle step (`trace`).
 
+/// M36: semantic checks on a compiled `TopologySchema`. Used by `stc --check`
+/// to report suspicious patterns (self-loops, unreachable states) as
+/// non-blocking warnings; pure function of the schema, no IO.
+pub mod check;
+
 /// M28: Domain Description Language (DDL) compiler. Compiles `.ddl` source into
 /// the engine's `TopologySchema` (see `src/ddl/`); the engine layer is
 /// untouched.

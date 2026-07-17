@@ -4,10 +4,13 @@
 // JSON topology schema. The compiled schema feeds the unmodified engine and
 // the rest of the tool chain (`sts` / `stt` / `stp` / `stv`).
 //
-// Usage: stc <input.ddl> [output.json]
+// Usage: stc [--check] <input.ddl> [output.json]
 //   With no output path, the JSON is printed to stdout.
+//   With `--check`, semantic warnings are printed to stderr (non-blocking)
+//   before the JSON is written: self-loops and unreachable states.
 
 use serde_json::{Map, Value};
+use signal_topology::check::check_schema;
 use signal_topology::ddl::compile;
 use signal_topology::schema::{ActionBinding, TopologySchema};
 use std::env;
@@ -17,12 +20,29 @@ use std::process::exit;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 || args.len() > 3 {
-        eprintln!("Usage: stc <input.ddl> [output.json]");
+
+    // Pull the optional `--check` flag out of the arg list; everything else is
+    // positional. This keeps `stc --check <ddl> [out]` and `stc <ddl> [out]`
+    // without committing to a specific flag position.
+    let mut check = false;
+    let positional: Vec<&str> = args[1..]
+        .iter()
+        .filter_map(|a| {
+            if a == "--check" {
+                check = true;
+                None
+            } else {
+                Some(a.as_str())
+            }
+        })
+        .collect();
+
+    if positional.is_empty() || positional.len() > 2 {
+        eprintln!("Usage: stc [--check] <input.ddl> [output.json]");
         exit(1);
     }
 
-    let input_path = Path::new(&args[1]);
+    let input_path = Path::new(positional[0]);
 
     let src = fs::read_to_string(input_path).unwrap_or_else(|e| {
         eprintln!("Failed to read '{}': {}", input_path.display(), e);
@@ -34,6 +54,21 @@ fn main() {
         exit(1);
     });
 
+    // M36: `--check` runs the semantic checker and prints any warnings to
+    // stderr. It is non-blocking — warnings never abort the run or change
+    // the exit code — so the JSON below is still produced. When an output
+    // path is also supplied the user gets both: warnings now, topology later.
+    if check {
+        let warnings = check_schema(&schema);
+        for w in &warnings {
+            eprintln!("Warning: {}: {}", w.kind, w.message);
+        }
+        match warnings.len() {
+            0 => eprintln!("No warnings found."),
+            n => eprintln!("{} warning(s) found.", n),
+        }
+    }
+
     // `TopologySchema` is Deserialize-only (engine layer, untouched), so we
     // serialize manually from its public fields.
     let json = serde_json::to_string_pretty(&schema_to_value(&schema)).unwrap_or_else(|e| {
@@ -41,9 +76,9 @@ fn main() {
         exit(1);
     });
 
-    if args.len() == 3 {
-        let output_path = Path::new(&args[2]);
-        fs::write(output_path, json).unwrap_or_else(|e| {
+    if positional.len() == 2 {
+        let output_path = Path::new(positional[1]);
+        fs::write(output_path, &json).unwrap_or_else(|e| {
             eprintln!("Failed to write '{}': {}", output_path.display(), e);
             exit(1);
         });
