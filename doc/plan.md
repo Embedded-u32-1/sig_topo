@@ -5,9 +5,9 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.11 M28 ✅（DDL 编译器 + stc CLI，commit c67429b，129 测试绿）；下一步 M29（运行时 DOT 高亮 snapshot_dot）。**
+当前阶段：**v0.11 M28 ✅（c67429b）+ M29 ✅（1280a72，137 测试绿）；下一步 M30（项目成熟度收尾）。**
 
-最近完成的工作（M28）：
+最近完成的工作（M29）：
 
 - `Cargo.toml` 注册 `sts` bin；`src/bin/sts.rs`（225 行，含 `event` / `state` / `trace` / `help` / `quit` + print-and-record 动作）；`tests/sts_test.rs`（3 个集成测试：正常跃迁 / 失败回滚 / state-trace 读取路径）。
 - 编译验证发现 sts.rs 对 engine API 的调用与真实签名**完全一致**，零修改；引擎零改动、未新增依赖。
@@ -189,7 +189,7 @@ reaction {
 4. 现有 100 测试零回归。
 5. `doc/ddl.md` 覆盖全部语法。
 
-### M29：运行时状态高亮 DOT（snapshot_dot，路线图 M2 未做项）—— 下一步
+### M29：运行时状态高亮 DOT（snapshot_dot，路线图 M2 未做项）✅（commit 1280a72）
 
 **目标**：`stv` 当前只能画拓扑骨架；补一个"当前各信号处在哪"的运行时视图。
 
@@ -199,7 +199,7 @@ reaction {
 - 测试：`to_dot_with_state` 初始态 vs 非初始态节点属性不同；`engine.snapshot_dot()` 包含当前态高亮。
 - 文档：`doc/visualization.md` 补"运行时高亮"节。
 
-### M30：项目成熟度收尾（doc-comments + version bump）
+### M30：项目成熟度收尾（doc-comments + version bump）—— 下一步
 
 **目标**：把 already-complete 的工程收拾体面。
 
@@ -217,7 +217,7 @@ reaction {
 
 - 具体实现与端到端审核：委托子代理（Agent）。
 - 本进程负责：路线判断、计划记录、提交计划文档、按代理反馈把新事实更新到本计划。
-- 当前：M28 ✅；下一步委托 M29（snapshot_dot 运行时高亮）。
+- 当前：M28 ✅ M29 ✅；下一步委托 M30（项目成熟度收尾：doc-comments + version bump + README 五 CLI）。
 
 ### M28 收口观察（留给后续轮次，不阻塞 M28）
 
