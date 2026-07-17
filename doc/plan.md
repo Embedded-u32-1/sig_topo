@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.15 M41 ✅（guard 调试器，commit 40ea958，201 测试绿）；下一步 M42（snapshot_dot 增强）。**
+当前阶段：**v0.15 M41 ✅（40ea958）+ M42 ✅（4728de3，204 测试绿）；下一步 M43（收口：version 0.5.0）。**
 
 最近完成的工作（M33）：
 
@@ -217,7 +217,7 @@ reaction {
 
 - 具体实现与端到端审核：委托子代理（Agent）。
 - 本进程负责：路线判断、计划记录、提交计划文档、按代理反馈把新事实更新到本计划。
-- 当前：M41 ✅；下一步委托 M42（snapshot_dot 增强）。
+- 当前：M41 ✅ M42 ✅；下一步委托 M43（收口：version 0.5.0 + doc-comments 复核）。
 
 ### M28 收口观察（留给后续轮次，不阻塞 M28）
 
@@ -525,7 +525,7 @@ v0.14（M38 reaction guard 复合语义 + M39 guard demo + stc --check 增强 + 
 2. 195 测试零回归 + clippy 零警告。
 3. `doc/shell.md` 补 `why` 命令说明 + 示例转录。
 
-### M42：snapshot_dot 增强（标出 guard-blocked reaction）—— 下一步
+### M42：snapshot_dot 增强（标出 guard-blocked reaction）✅（commit 4728de3）
 
 **目标**：在 DOT 图中可视化 reaction guard 阻断。
 
@@ -544,7 +544,7 @@ v0.14（M38 reaction guard 复合语义 + M39 guard demo + stc --check 增强 + 
 1. `snapshot_dot_extended` 绘制 reaction 边并按 guard 结果着色。
 2. 195 测试零回归 + clippy 零警告。
 
-### M43：收口
+### M43：收口 —— 下一步
 
 - 全模块 doc-comments 复核（M41/M42 新增代码）。
 - version 0.4.0 → 0.5.0（guard 可观测性 + 调试是 guard 系统的闭环）。
