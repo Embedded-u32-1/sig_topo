@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.15 全收口**（M41 ✅ 40ea958 + M42 ✅ 4728de3 + M43 ✅，204 测试绿，version 0.5.0）。
+当前阶段：**v0.15 全收口（M41–M43 ✅，204 测试绿，0.5.0）。空闲决策点后，经判断启动 v0.16 新方向：工作流引擎（fork/join/sub-topology）。M44 起由 agent 逐步实现。**
 
 最近完成的工作（M33）：
 
@@ -560,3 +560,34 @@ v0.14（M38 reaction guard 复合语义 + M39 guard demo + stc --check 增强 + 
 
 1. doc-comments 复核确认 M41/M42 代码在当轮已写齐，本轮零补充；doc 零 warning 已于 M40 起持续保持，本轮再确认。
 2. `why` 命令与 `dot-ext` 命令的文档均已在当轮落入 `doc/shell.md` 与 `doc/visualization.md`，README doc 导航无需额外加行。
+
+## v0.16 下一段：工作流引擎（fork/join/sub-topology）
+
+### 路线判断
+
+愿景"描述文件与业务逻辑分离"的终极考验是能否用 DDL 描述真正的业务流程（含并行分支与汇流）。当前 reaction 级联是线性的（A→B→C），无法表达"支付与库存并行扣减，两者都成功后才发货"这类 fork/join 工作流。在 M1/M2/M3/M4 候选中，**M2（工作流引擎：fork/join/sub-topology）是唯一让项目从"状态机编排"升格为"工作流引擎"的一步**。
+
+**节奏**：M44 fork/join 引擎语义 + DDL 语法 → M45 sub-topology 组合 → M46 收口。
+
+### M44：v0.16 fork/join 引擎语义 + DDL 语法 —— 设计 + 实现（本轮起）
+
+目标：让 engine + DDL 支持 fork（并行 reaction 组）与 join（多信号都到达后才触发下游）。
+
+- Engine（`src/engine.rs` + `src/schema.rs`）：
+  - `ReactionDef` 新增 `join_group: Option<String>` + `requires: Vec<String>` 字段（#[serde(default)] 向后兼容）。
+  - `send_event_internal` reaction 派发段重构：按 `join_group` 分组，同一 from_signal+from_state 的反应按 group 并行派发；带 `requires` 的反应等待所有依赖 group 完成后再派发（需要内部状态追踪 group 完成状态）。
+  - group 完成追踪：当前 reaction 循环是"即发即忘"，改为维护 group → completed 集合；reaction 若 requires 未全部完成则延迟 / 或报错。
+- DDL：新增 `fork { reaction... }` 块（声明哪些 reaction 并行）+ `join <group> { reaction... }` 块（声明哪些 reaction 在 group 完成后触发）。
+- 测试：fork 场景（A→B+C 并行执行）/ join 场景（B+C 都完成才→D）/ 混合 fork+join 场景。
+
+验收：fork/join 场景端到端跑通（DDL 编译 → engine 跑 → 终态正确）；204 测试零回归；clippy 零警告。
+
+### M45：sub-topology 组合
+
+目标：把一组 signal+transaction+reaction 封装为可复用"子拓扑组件"（增强版 component，带实例化参数 + 对外暴露的端口/接口）。
+
+### M46：收口
+
+- doc-comments 复核。
+- version 0.5.0 → 0.6.0（工作流引擎是质的飞跃）。
+- README / roadmap / plan 同步。
