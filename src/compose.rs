@@ -1,3 +1,6 @@
+//! Topology composition: expand parameterized components/instances and resolve
+//! cross-file imports into a single flat `TopologySchema` ready for the engine.
+
 use crate::error::EngineError;
 use crate::schema::{
     ActionBinding, ComponentDef, ReactionDef, SignalDef, TopologySchema, TransitionDef,

@@ -8,8 +8,11 @@
 // Pipeline: source -> lexer (tokens) -> parser (AST `DdlDoc`) -> codegen
 // (`TopologySchema`).
 
+/// Lower a `DdlDoc` AST into a `TopologySchema`.
 pub mod codegen;
+/// Lex DDL source into `TokenKind`s.
 pub mod lexer;
+/// Recursive-descent parse tokens into a `DdlDoc` AST.
 pub mod parser;
 
 use crate::error::EngineError;

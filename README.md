@@ -29,6 +29,14 @@ cargo run --bin stv -- examples/components/house.json
 cargo run --bin sts -- examples/order_approval.json
 ```
 
+# Compile a DDL topology to JSON
+
+```bash
+cargo run --bin stc -- <in.ddl> [out.json]
+```
+
+`stc` (signal-topology-compiler) compiles a `.ddl` [Domain Description Language](doc/ddl.md) source file into the engine's JSON topology schema. With no output path the JSON is printed to stdout.
+
 `sts` (signal-topology-shell) loads a topology and drops you into a REPL where you can send events, inspect state, and print the trace log one step at a time. Walk-throughs: [examples/order_approval.md](examples/order_approval.md), [examples/gate_flow.md](examples/gate_flow.md). Full command reference: [doc/shell.md](doc/shell.md).
 
 ## Modules
@@ -43,6 +51,7 @@ cargo run --bin sts -- examples/order_approval.json
 | `persist`   | `save_state` / `load_state` / `reload_topology`: snapshot and restore engine state to/from JSON. |
 | `export`    | `to_dot`: render a topology to Graphviz DOT for visualization. |
 | `run`       | Shared scaffolding for the `sts` / `stt` / `stp` binaries: builds a runnable engine from a topology + fail-set. Not a stable library API. |
+| `ddl`       | Domain Description Language compiler: `.ddl` source → `TopologySchema` (JSON model). |
 
 ## Documentation
 
@@ -55,6 +64,7 @@ cargo run --bin sts -- examples/order_approval.json
 - [Shell](doc/shell.md) — the `sts` interactive REPL (commands, debugging, end-to-end demo).
 - [Transaction](doc/transaction.md) — single-signal transactional rollback semantics (v0.8).
 - [Run module](doc/run.md) — shared `sts`/`stt`/`stp` scaffolding (not a stable library API).
+- [DDL](doc/ddl.md) — the Domain Description Language: write `.ddl` instead of JSON, compile with `stc`.
 - [Roadmap](doc/roadmap.md) — milestone history and upcoming direction.
 
 ## Tests
@@ -63,7 +73,7 @@ cargo run --bin sts -- examples/order_approval.json
 cargo test
 ```
 
-100 tests across unit, integration, and CLI test files. All should pass with zero failures before merging.
+138 tests across unit, integration, CLI, and doctest files. All should pass with zero failures before merging.
 
 ## License
 

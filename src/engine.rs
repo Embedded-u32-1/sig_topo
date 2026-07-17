@@ -5,25 +5,48 @@ use crate::trace::{now_ms, TraceEvent, TraceLog};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
+/// The context passed to every action callback during a transition.
+///
+/// Lifecycle actions at all three phases (`on_exit`, `on_transition`, `on_enter`)
+/// receive the same `ActionContext` describing the transition being attempted.
 #[derive(Debug, Clone)]
 pub struct ActionContext {
+    /// The signal being transitioned.
     pub signal_id: String,
+    /// The source state the signal is leaving.
     pub from_state: String,
+    /// The target state the signal is entering.
     pub to_state: String,
+    /// The event name that triggered the transition.
     pub event: String,
+    /// The event payload, if any. `None` for events sent without a payload.
     pub payload: Option<Value>,
 }
 
+/// The outcome of a successful transition, returned by `send_event`.
 #[derive(Debug)]
 pub struct TransitionResult {
+    /// The signal that transitioned.
     pub signal_id: String,
+    /// The source state the signal left.
     pub from: String,
+    /// The target state the signal entered.
     pub to: String,
+    /// The action ids that ran, in lifecycle order (`on_exit` → `on_transition`
+    /// → `on_enter`). Includes only the actions that were reached before any
+    /// failure (a failing action short-circuits the rest).
     pub executed_actions: Vec<String>,
 }
 
 type ActionFn = Box<dyn FnMut(ActionContext) -> Result<(), EngineError> + 'static>;
 
+/// A validated, runnable signal-topology engine.
+///
+/// Build one with `from_json` / `from_schema` (or `TopologyEngine`-free
+/// `load_topology` / `from_path` in `crate::compose`), register action
+/// implementations with `register_action`, then drive signals through transitions
+/// with `send_event`. Every run appends to an internal trace log readable via
+/// `traces` / `traces_for`.
 pub struct TopologyEngine {
     pub(crate) signals: HashMap<String, SignalState>,
     pub(crate) transitions: Vec<TransitionDef>,
@@ -43,12 +66,22 @@ pub(crate) struct SignalState {
 }
 
 impl TopologyEngine {
+    /// Parse a JSON topology and build a ready-to-run engine.
+    ///
+    /// The JSON is deserialized into a `TopologySchema`, expanded (components /
+    /// instances / includes) and validated before the engine is constructed.
+    /// Returns `EngineError::ParseError` on malformed JSON or a validation error
+    /// on an invalid topology.
     pub fn from_json(json_str: &str) -> Result<Self, EngineError> {
         let schema: TopologySchema =
             serde_json::from_str(json_str).map_err(|e| EngineError::ParseError(e.to_string()))?;
         Self::from_schema(schema)
     }
 
+    /// Build an engine from an already-deserialized `TopologySchema`.
+    ///
+    /// Like `from_json` but takes the schema directly, useful when the topology
+    /// is constructed programmatically. The schema is expanded and validated.
     pub fn from_schema(schema: TopologySchema) -> Result<Self, EngineError> {
         // Expand parameterized components/instances into a flat schema before
         // validation. When `instances` is empty this is a no-op pass-through,
@@ -79,6 +112,11 @@ impl TopologyEngine {
         })
     }
 
+    /// Validate a `TopologySchema` without building an engine.
+    ///
+    /// Checks for duplicate signal ids, unknown signal references in transitions
+    /// and reactions, and `from`/`to`/`initial_state` values that are not
+    /// members of the signal's `states` list. `from` may be the wildcard `*`.
     pub fn validate(schema: &TopologySchema) -> Result<(), EngineError> {
         let mut signal_ids = HashSet::new();
         for sig in &schema.signals {
@@ -140,6 +178,12 @@ impl TopologyEngine {
         Ok(())
     }
 
+    /// Register an action callback under `action_id`.
+    ///
+    /// Each action id referenced by a transition's lifecycle phases must be
+    /// registered before `send_event` runs that transition, otherwise the
+    /// transition fails with `EngineError::ActionNotFound`. Registering the same
+    /// id twice overwrites the previous callback.
     pub fn register_action<F>(&mut self, action_id: &str, f: F)
     where
         F: FnMut(ActionContext) -> Result<(), EngineError> + 'static,
@@ -148,6 +192,11 @@ impl TopologyEngine {
             .insert(action_id.to_string(), Box::new(f));
     }
 
+    /// Set the maximum cascade depth (default 8).
+    ///
+    /// When a transition commits, matching reactions fire derived events
+    /// recursively; this limit bounds that recursion. Exceeding it returns
+    /// `EngineError::CascadeDepthExceeded`.
     pub fn set_max_cascade_depth(&mut self, depth: usize) {
         self.max_cascade_depth = depth;
     }
@@ -188,6 +237,15 @@ impl TopologyEngine {
         Ok(())
     }
 
+    /// Send an event to a signal, attempting the matching transition.
+    ///
+    /// The transition is chosen by `(signal_id, event)` matching the signal's
+    /// current state (or the wildcard `*`). A `when` guard, if present, is
+    /// evaluated against the payload and blocks the transition on `false`
+    /// (`EngineError::GuardBlocked`). On a match, the three lifecycle phases run
+    /// in order; any action failure rolls the signal back to its source state and
+    /// returns the error. On success, matching reactions are fired recursively
+    /// (bounded by `max_cascade_depth`) and a `TransitionResult` is returned.
     pub fn send_event(
         &mut self,
         signal_id: &str,
@@ -366,6 +424,9 @@ impl TopologyEngine {
         Ok(result)
     }
 
+    /// Return the current state of `signal_id`.
+    ///
+    /// Returns `EngineError::SignalNotFound` if the signal does not exist.
     pub fn get_state(&self, signal_id: &str) -> Result<&str, EngineError> {
         let signal = self
             .signals
@@ -374,6 +435,7 @@ impl TopologyEngine {
         Ok(&signal.current)
     }
 
+    /// Return every signal id in the engine, in arbitrary order.
     pub fn signal_ids(&self) -> Vec<&str> {
         self.signals.keys().map(|s| s.as_str()).collect()
     }
@@ -419,6 +481,12 @@ impl TopologyEngine {
         crate::export::to_dot_with_state(&schema, &states)
     }
 
+    /// Replace the engine's topology while preserving current signal states.
+    ///
+    /// Existing signals keep their current state; new signals start at their
+    /// `initial_state`; dropped signals' states are discarded. The new topology
+    /// is validated, and on any parse or validation error the engine is left
+    /// unchanged and an `EngineError::ReloadError` is returned.
     pub fn reload_topology(&mut self, json_str: &str) -> Result<(), EngineError> {
         let schema: TopologySchema =
             serde_json::from_str(json_str).map_err(|e| EngineError::ReloadError(e.to_string()))?;
@@ -447,14 +515,17 @@ impl TopologyEngine {
         Ok(())
     }
 
+    /// Return every recorded trace event, in order.
     pub fn traces(&self) -> &[TraceEvent] {
         self.trace.events()
     }
 
+    /// Return the trace events involving `signal_id`, in order.
     pub fn traces_for(&self, signal_id: &str) -> Vec<&TraceEvent> {
         self.trace.for_signal(signal_id)
     }
 
+    /// Clear the trace log.
     pub fn clear_traces(&mut self) {
         self.trace.clear();
     }

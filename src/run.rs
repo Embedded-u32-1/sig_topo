@@ -1,15 +1,15 @@
-// Shared helpers for the `sts` (interactive shell) and `stt` (batch replay)
-// binaries. Both build a ready-to-run engine the same way -- resolve includes,
-// expand instances, register a handler per action -- differing only in (a)
-// whether they print a live `[action] <signal>.<id>` line as each action runs
-// and (b) which action ids are forced to fail next. Extracting this keeps the
-// two binaries from drifting and gives the replay tool the same rollback
-// demonstration the shell already has.
-//
-// This module is `pub` so the binary crates (`src/bin/*.rs`) can build against
-// it, but it is intentionally not part of the stable library surface: it is the
-// common scaffolding that turns a topology file + a shared fail-set into a
-// runnable engine.
+//! Shared helpers for the `sts` (interactive shell) and `stt` (batch replay)
+//! binaries. Both build a ready-to-run engine the same way -- resolve includes,
+//! expand instances, register a handler per action -- differing only in (a)
+//! whether they print a live `[action] <signal>.<id>` line as each action runs
+//! and (b) which action ids are forced to fail next. Extracting this keeps the
+//! two binaries from drifting and gives the replay tool the same rollback
+//! demonstration the shell already has.
+//!
+//! This module is `pub` so the binary crates (`src/bin/*.rs`) can build against
+//! it, but it is intentionally not part of the stable library surface: it is the
+//! common scaffolding that turns a topology file + a shared fail-set into a
+//! runnable engine.
 
 use crate::engine::TopologyEngine;
 use crate::error::EngineError;
