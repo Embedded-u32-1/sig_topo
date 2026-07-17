@@ -1,6 +1,4 @@
-use signal_topology::trace::TraceEvent;
-use signal_topology::EngineError;
-use signal_topology::load_topology;
+use signal_topology::run::{format_trace, load_topology_for_run};
 use signal_topology::TopologyEngine;
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -83,7 +81,7 @@ impl StsSession {
     /// `ActionExecutionError` so the engine rolls the transition back.
     fn new(topology_path: &str) -> Self {
         let fail_set = Rc::new(RefCell::new(HashSet::new()));
-        let engine = load_topology_for_run(topology_path, Rc::clone(&fail_set));
+        let engine = load_topology_for_run(topology_path, Some(Rc::clone(&fail_set)), true);
         Self { engine, fail_set }
     }
 
@@ -249,113 +247,6 @@ fn cmd_help() {
     println!("  quit / exit                             leave the shell");
 }
 
-/// Load a topology file into a ready-to-run engine. Resolves `includes` and
-/// expands `instances` via `load_topology`, collects action ids from the
-/// *expanded* transitions (so component-defined actions are registered too),
-/// builds the engine, and registers every action with a print-and-record
-/// handler. Each handler consults the shared `fail_set`: when its own action id
-/// is present it returns `ActionExecutionError`, which the engine turns into a
-/// rolled-back transition. This is the live rollback demo — no engine change,
-/// the failure is injected at the action-registration boundary where a real
-/// side-effecting action would live.
-fn load_topology_for_run(
-    topology_path: &str,
-    fail_set: Rc<RefCell<HashSet<String>>>,
-) -> TopologyEngine {
-    let schema = load_topology(std::path::Path::new(topology_path)).unwrap_or_else(|e| {
-        eprintln!("Failed to load topology '{}': {}", topology_path, e);
-        process::exit(1);
-    });
-
-    let mut action_ids = HashSet::new();
-    for trans in &schema.transitions {
-        action_ids.extend(trans.actions.all_actions().into_iter().cloned());
-    }
-
-    let mut engine = TopologyEngine::from_schema(schema).unwrap_or_else(|e| {
-        eprintln!("Failed to load topology: {}", e);
-        process::exit(1);
-    });
-
-    for action_id in &action_ids {
-        let id = action_id.clone();
-        let fail_set = Rc::clone(&fail_set);
-        engine.register_action(action_id, move |ctx| {
-            if fail_set.borrow().contains(&id) {
-                return Err(EngineError::ActionExecutionError(format!(
-                    "injected failure for action '{}' (set via `fail`)",
-                    id
-                )));
-            }
-            println!("[action] {}.{}", ctx.signal_id, id);
-            Ok(())
-        });
-    }
-
-    engine
-}
-
-/// Format a single trace event, matching the layout produced by stt.
-fn format_trace(event: &TraceEvent) -> String {
-    match event {
-        TraceEvent::EventReceived {
-            signal_id,
-            event,
-            timestamp_ms,
-            payload,
-        } => format!(
-            "[{}] EventReceived {}.{} payload={}",
-            timestamp_ms,
-            signal_id,
-            event,
-            payload.as_deref().unwrap_or("None")
-        ),
-        TraceEvent::ActionStarted {
-            signal_id,
-            action_id,
-            timestamp_ms,
-        } => format!(
-            "[{}] ActionStarted {}.{}",
-            timestamp_ms, signal_id, action_id
-        ),
-        TraceEvent::ActionSucceeded {
-            signal_id,
-            action_id,
-            timestamp_ms,
-        } => format!(
-            "[{}] ActionSucceeded {}.{}",
-            timestamp_ms, signal_id, action_id
-        ),
-        TraceEvent::ActionFailed {
-            signal_id,
-            action_id,
-            timestamp_ms,
-            error,
-        } => format!(
-            "[{}] ActionFailed {}.{} error={}",
-            timestamp_ms, signal_id, action_id, error
-        ),
-        TraceEvent::StateChanged {
-            signal_id,
-            from,
-            to,
-            timestamp_ms,
-        } => format!(
-            "[{}] StateChanged {}: {} -> {}",
-            timestamp_ms, signal_id, from, to
-        ),
-        TraceEvent::Rollbacked {
-            signal_id,
-            from,
-            to,
-            timestamp_ms,
-        } => format!(
-            "[{}] Rollbacked {}: {} -> {}",
-            timestamp_ms, signal_id, from, to
-        ),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Unit tests for the pure command-parsing layer.
 // ---------------------------------------------------------------------------
@@ -363,6 +254,7 @@ fn format_trace(event: &TraceEvent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use signal_topology::EngineError;
 
     #[test]
     fn parse_event_without_payload() {

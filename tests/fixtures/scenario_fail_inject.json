@@ -1,0 +1,12 @@
+{
+  "events": [
+    { "signal_id": "order", "event": "submit" },
+    {
+      "signal_id": "order",
+      "event": "approve",
+      "payload": { "amount": 5000 },
+      "fail_actions": ["reserve_inventory"]
+    },
+    { "signal_id": "order", "event": "approve", "payload": { "amount": 5000 } }
+  ]
+}

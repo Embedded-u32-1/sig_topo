@@ -113,6 +113,48 @@ With no events yet, `trace` prints `(no trace events)`.
 
 Both build the engine the same way (resolve includes, expand instances, register a handler per action), so a flow verified interactively in `sts` can be captured into a `scenario.json` and replayed with `stt`.
 
+## stt scenario format + failure injection
+
+`stt` reads a `scenario.json` that lists events to replay in order:
+
+```json
+{
+  "events": [
+    { "signal_id": "order", "event": "submit" },
+    { "signal_id": "order", "event": "approve", "payload": { "amount": 5000 } }
+  ]
+}
+```
+
+Each event is `{ "signal_id", "event", "payload?": json }` -- the same shape the `sts` `event` command sends. Drop the file next to your topology and run:
+
+```bash
+cargo run --bin stt -- examples/order_approval.json scenario.json
+```
+
+`stt` dumps the full trace log after all events run, identical in layout to the `sts` `trace` command.
+
+### Injecting a failure
+
+An event can optionally name `fail_actions` -- a list of action ids forced to fail *for that event alone*. While the event dispatches, each named action returns an `ActionExecutionError`, so the engine rolls the transition back (exactly like the `sts` `fail` command). After the event resolves the names are cleared, so a later event that re-uses the same action is unaffected.
+
+```json
+{
+  "events": [
+    { "signal_id": "order", "event": "submit" },
+    {
+      "signal_id": "order",
+      "event": "approve",
+      "payload": { "amount": 5000 },
+      "fail_actions": ["reserve_inventory"]
+    },
+    { "signal_id": "order", "event": "approve", "payload": { "amount": 5000 } }
+  ]
+}
+```
+
+On a failed event `stt` prints the error and the rolled-back state to stderr and *continues* with the next event -- a replay transcript is most useful when it shows `ActionFailed` + `Rollbacked` in context with the events that follow. The trace above records the failing `approve` as `ActionStarted order.reserve_inventory` -> `ActionFailed ...` -> `Rollbacked order: approved -> submitted`, then the re-try commits to `approved`.
+
 ## End-to-end demo
 
 The following transcript runs verbatim against [examples/order_approval.json](../examples/order_approval.json). Copy the input lines after the prompt:

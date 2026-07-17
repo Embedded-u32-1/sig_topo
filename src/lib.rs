@@ -4,6 +4,7 @@ pub mod error;
 pub mod export;
 pub mod guard;
 pub mod persist;
+pub mod run;
 pub mod schema;
 pub mod trace;
 

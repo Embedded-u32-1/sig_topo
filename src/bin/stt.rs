@@ -1,20 +1,8 @@
-use serde::Deserialize;
-use signal_topology::load_topology;
-use signal_topology::trace::TraceEvent;
-use signal_topology::TopologyEngine;
+use signal_topology::run::{format_trace, load_topology_for_run, run_scenario, Scenario};
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::rc::Rc;
 use std::{env, fs, process};
-
-#[derive(Debug, Deserialize)]
-struct Scenario {
-    events: Vec<ScenarioEvent>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ScenarioEvent {
-    signal_id: String,
-    event: String,
-    payload: Option<serde_json::Value>,
-}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -26,7 +14,11 @@ fn main() {
     let topology_path = &args[1];
     let scenario_path = &args[2];
 
-    let mut engine = load_topology_for_run(topology_path);
+    // A shared, mutable set of action ids forced to fail. Each scenario event
+    // may name `fail_actions` to inject into it for that event alone; the
+    // handlers read the set the same way the `sts` shell's `fail` command does.
+    let fail_set = Rc::new(RefCell::new(HashSet::new()));
+    let mut engine = load_topology_for_run(topology_path, Some(Rc::clone(&fail_set)), false);
 
     let scenario_json = fs::read_to_string(scenario_path).unwrap_or_else(|e| {
         eprintln!("Failed to read scenario '{}': {}", scenario_path, e);
@@ -38,104 +30,16 @@ fn main() {
         process::exit(1);
     });
 
-    for ev in &scenario.events {
-        if let Err(e) = engine.send_event(&ev.signal_id, &ev.event, ev.payload.clone()) {
-            eprintln!(
-                "Error sending event {}.{}: {}",
-                ev.signal_id, ev.event, e
-            );
-            process::exit(1);
-        }
+    // Replay records every failure (with the rolled-back state, mirroring the
+    // shell's `event` error output) and continues with the next event instead
+    // of stopping -- a replay transcript is most useful when it shows the
+    // `ActionFailed` + `Rollbacked` in context with the events that follow.
+    for err in run_scenario(&mut engine, &scenario, &fail_set) {
+        eprintln!("Error sending event {}.{}: {}", err.signal_id, err.event, err.error);
+        eprintln!("State rolled back to '{}'", err.state_after);
     }
 
     for event in engine.traces() {
         println!("{}", format_trace(event));
-    }
-}
-
-/// Load a topology file into a ready-to-run engine. Resolves `includes` and
-/// expands `instances` via `load_topology`, collects action ids from the
-/// *expanded* transitions (so component-defined actions are registered too),
-/// builds the engine, and registers every action with a no-op handler.
-fn load_topology_for_run(topology_path: &str) -> TopologyEngine {
-    let schema = load_topology(std::path::Path::new(topology_path)).unwrap_or_else(|e| {
-        eprintln!("Failed to load topology '{}': {}", topology_path, e);
-        process::exit(1);
-    });
-
-    let mut action_ids = std::collections::HashSet::new();
-    for trans in &schema.transitions {
-        action_ids.extend(trans.actions.all_actions().into_iter().cloned());
-    }
-
-    let mut engine = TopologyEngine::from_schema(schema).unwrap_or_else(|e| {
-        eprintln!("Failed to load topology: {}", e);
-        process::exit(1);
-    });
-
-    for action_id in &action_ids {
-        engine.register_action(action_id, |_| Ok(()));
-    }
-
-    engine
-}
-
-fn format_trace(event: &TraceEvent) -> String {
-    match event {
-        TraceEvent::EventReceived {
-            signal_id,
-            event,
-            timestamp_ms,
-            payload,
-        } => format!(
-            "[{}] EventReceived {}.{} payload={}",
-            timestamp_ms,
-            signal_id,
-            event,
-            payload.as_deref().unwrap_or("None")
-        ),
-        TraceEvent::ActionStarted {
-            signal_id,
-            action_id,
-            timestamp_ms,
-        } => format!(
-            "[{}] ActionStarted {}.{}",
-            timestamp_ms, signal_id, action_id
-        ),
-        TraceEvent::ActionSucceeded {
-            signal_id,
-            action_id,
-            timestamp_ms,
-        } => format!(
-            "[{}] ActionSucceeded {}.{}",
-            timestamp_ms, signal_id, action_id
-        ),
-        TraceEvent::ActionFailed {
-            signal_id,
-            action_id,
-            timestamp_ms,
-            error,
-        } => format!(
-            "[{}] ActionFailed {}.{} error={}",
-            timestamp_ms, signal_id, action_id, error
-        ),
-        TraceEvent::StateChanged {
-            signal_id,
-            from,
-            to,
-            timestamp_ms,
-        } => format!(
-            "[{}] StateChanged {}: {} -> {}",
-            timestamp_ms, signal_id, from, to
-        ),
-        TraceEvent::Rollbacked {
-            signal_id,
-            from,
-            to,
-            timestamp_ms,
-        } => format!(
-            "[{}] Rollbacked {}: {} -> {}",
-            timestamp_ms, signal_id, from, to
-        ),
     }
 }
