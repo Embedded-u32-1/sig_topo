@@ -1,6 +1,6 @@
 [package]
 name = "wasm-topology"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "M35: wasm-bindgen wrapper exposing signal-topology's TopologyEngine to the browser / Node."
 license = "MIT OR Apache-2.0"

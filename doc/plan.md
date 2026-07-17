@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.15 M41 ✅（40ea958）+ M42 ✅（4728de3，204 测试绿）；下一步 M43（收口：version 0.5.0）。**
+当前阶段：**v0.15 全收口**（M41 ✅ 40ea958 + M42 ✅ 4728de3 + M43 ✅，204 测试绿，version 0.5.0）。
 
 最近完成的工作（M33）：
 
@@ -544,9 +544,19 @@ v0.14（M38 reaction guard 复合语义 + M39 guard demo + stc --check 增强 + 
 1. `snapshot_dot_extended` 绘制 reaction 边并按 guard 结果着色。
 2. 195 测试零回归 + clippy 零警告。
 
-### M43：收口 —— 下一步
+### M43：收口 ✅（v0.15 全收口）
 
-- 全模块 doc-comments 复核（M41/M42 新增代码）。
-- version 0.4.0 → 0.5.0（guard 可观测性 + 调试是 guard 系统的闭环）。
-- README / roadmap / plan 同步（加 `why` 命令 + snapshot_dot_extended 段）。
-- `cargo test` + `cargo clippy` + `cargo doc` 全绿。
+**目标**：把 v0.15 guard 可观测性 + 调试（M41/M42）收拾体面；全程不改功能代码行为。
+
+**实际完成项**：
+
+- [x] doc-comments 复核：M41/M42 新增代码在当轮已全覆盖（`dot.rs` `to_dot_extended` + `reaction_from_node`/`anchor_node` helpers；`engine.rs` `snapshot_dot_extended` + `guard_info_from_traces`；`sts.rs` `cmd_dot_ext`/`cmd_why` + `Command::Why`/`Command::DotExt` 变体 + `ParseError::WhyArgs`；`run.rs` `format_why`）。`RUSTDOCFLAGS="-Dwarnings" cargo doc --no-deps` 零 warning，本轮零补充。
+- [x] version 0.4.0 → 0.5.0（主 crate `Cargo.toml` + 子 crate `wasm-topology/Cargo.toml`；guard 可观测性 + 调试是 guard 系统的闭环）。
+- [x] README 同步：测试数 195 → 204；doc 导航（`visualization.md` 覆盖 dot-ext、`shell.md` 覆盖 why/dot-ext）已核对存在。
+- [x] roadmap / plan 同步：当前状态指向 v0.15 全收口；下一步候选 M1-M4（stc LSP / 工作流引擎 / guard 持久化 / reaction 补偿）。
+- [x] `cargo test` 204 全绿 + `cargo clippy --all-targets` 零警告 + `RUSTDOCFLAGS="-Dwarnings" cargo doc --no-deps` 零 warning。
+
+**观察（留给后续轮次，不阻塞 M43）**：
+
+1. doc-comments 复核确认 M41/M42 代码在当轮已写齐，本轮零补充；doc 零 warning 已于 M40 起持续保持，本轮再确认。
+2. `why` 命令与 `dot-ext` 命令的文档均已在当轮落入 `doc/shell.md` 与 `doc/visualization.md`，README doc 导航无需额外加行。
