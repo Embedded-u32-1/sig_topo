@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.15 全收口（M41–M43 ✅，204 测试绿，0.5.0）。空闲决策点后，经判断启动 v0.16 新方向：工作流引擎（fork/join/sub-topology）。M44 起由 agent 逐步实现。**
+当前阶段：**v0.16 M44 ✅（fork/join 工作流引擎，commit 9ce7e27，215 测试绿）；下一步 M45（sub-topology 组合）。**
 
 最近完成的工作（M33）：
 
@@ -217,7 +217,7 @@ reaction {
 
 - 具体实现与端到端审核：委托子代理（Agent）。
 - 本进程负责：路线判断、计划记录、提交计划文档、按代理反馈把新事实更新到本计划。
-- 当前：M41 ✅ M42 ✅；下一步委托 M43（收口：version 0.5.0 + doc-comments 复核）。
+- 当前：M44 ✅；下一步委托 M45（sub-topology 组合：可复用子拓扑组件 + 实例化参数 + 对外端口）。
 
 ### M28 收口观察（留给后续轮次，不阻塞 M28）
 
@@ -569,7 +569,7 @@ v0.14（M38 reaction guard 复合语义 + M39 guard demo + stc --check 增强 + 
 
 **节奏**：M44 fork/join 引擎语义 + DDL 语法 → M45 sub-topology 组合 → M46 收口。
 
-### M44：v0.16 fork/join 引擎语义 + DDL 语法 —— 设计 + 实现（本轮起）
+### M44：v0.16 fork/join 引擎语义 + DDL 语法 ✅（commit 9ce7e27）
 
 目标：让 engine + DDL 支持 fork（并行 reaction 组）与 join（多信号都到达后才触发下游）。
 
@@ -582,7 +582,7 @@ v0.14（M38 reaction guard 复合语义 + M39 guard demo + stc --check 增强 + 
 
 验收：fork/join 场景端到端跑通（DDL 编译 → engine 跑 → 终态正确）；204 测试零回归；clippy 零警告。
 
-### M45：sub-topology 组合
+### M45：sub-topology 组合 —— 下一步
 
 目标：把一组 signal+transaction+reaction 封装为可复用"子拓扑组件"（增强版 component，带实例化参数 + 对外暴露的端口/接口）。
 
