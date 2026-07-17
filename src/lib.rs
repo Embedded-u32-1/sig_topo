@@ -36,6 +36,13 @@
 /// untouched.
 pub mod ddl;
 
+/// M31: C-ABI (FFI) shared-library surface. Lets C / Python / Node (via FFI)
+/// drive the engine: load a JSON topology, send events, read state and traces.
+/// The engine layer is untouched -- this module is a thin unsafe wrapper that
+/// translates across the language boundary. See `include/signal_topology.h`
+/// and `doc/ffi.md` for the cross-language usage.
+pub mod ffi;
+
 /// Parameterized component expansion (`expand`) and cross-file import with
 /// cycle detection (`load_topology`, `from_path`).
 pub mod compose;

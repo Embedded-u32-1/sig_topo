@@ -3,6 +3,10 @@ name = "signal-topology"
 version = "0.2.0"
 edition = "2021"
 
+[lib]
+name = "signal_topology"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
 [[bin]]
 name = "stv"
 path = "src/bin/stv.rs"
