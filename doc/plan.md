@@ -5,9 +5,9 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.11 全收口（M28–M30 ✅，138 测试绿，0.2.0）。空闲决策点后，经判断启动 v0.12 新方向：多语言绑定（C-ABI 优先）。M31 起由 agent 逐步实现。**
+当前阶段：**v0.12 M31 ✅（C-ABI 共享库，commit 9f54f80，150 测试绿）；下一步 M32（DDL 高阶语义 reaction guard）。**
 
-最近完成的工作（M30）：
+最近完成的工作（M31）：
 
 - `Cargo.toml` 注册 `sts` bin；`src/bin/sts.rs`（225 行，含 `event` / `state` / `trace` / `help` / `quit` + print-and-record 动作）；`tests/sts_test.rs`（3 个集成测试：正常跃迁 / 失败回滚 / state-trace 读取路径）。
 - 编译验证发现 sts.rs 对 engine API 的调用与真实签名**完全一致**，零修改；引擎零改动、未新增依赖。
@@ -217,7 +217,7 @@ reaction {
 
 - 具体实现与端到端审核：委托子代理（Agent）。
 - 本进程负责：路线判断、计划记录、提交计划文档、按代理反馈把新事实更新到本计划。
-- 当前：M28 ✅ M29 ✅ M30 ✅；v0.11 全收口。下一步方向待判断（见下）。
+- 当前：M31 ✅；下一步委托 M32（DDL 高阶语义 reaction guard）。
 
 ### M28 收口观察（留给后续轮次，不阻塞 M28）
 
@@ -245,7 +245,7 @@ v0.11（M28 DDL + M29 snapshot_dot + M30 成熟度）全收口。项目现状：
 | F：运行时增强 | reaction 守卫（ReactionDef 加 guard 字段，DDL 编译器已预留）、跨信号分布式事务。 |
 | G：示例/场景库 | 把 DDL 示例扩成"场景即测试"的回归库（订单审批 / 门控 / 任务调度 / 故障保护）。 |
 
-本次不自动推进；等待下一步指令。
+M31 收口后的调整：C-ABI 已落地；M32（DDL reaction guard）+ M33（场景库）顺次推进。
 
 ## v0.12 下一段：多语言绑定（C-ABI）+ DDL 高阶语义 + 场景库
 
@@ -255,7 +255,7 @@ v0.11（M28 DDL + M29 snapshot_dot + M30 成熟度）全收口。项目现状：
 
 **节奏**：M31 C-ABI 共享库（engine FFI + 头文件 + 跨语言 demo）→ M32 DDL 高阶语义（reaction guard + enter/leave 事件）→ M33 示例/场景库。
 
-### M31：v0.12 C-ABI 共享库 —— 设计 + 实现（本轮起）
+### M31：v0.12 C-ABI 共享库 ✅（commit 9f54f80）
 
 **目标**：让 C / C++ / Python / Node（via FFI）都能加载 .JSON 拓扑、投递事件、读状态/trace。lib 本身零依赖暴露；跨语言 demo 用系统自带工具（python3 ctypes / gcc）验证。
 
@@ -288,7 +288,7 @@ v0.11（M28 DDL + M29 snapshot_dot + M30 成熟度）全收口。项目现状：
 5. `examples/ffi/test.py` 运行后断言终态 shipped（实跑验证）。
 6. `doc/ffi.md` 覆盖函数签名 + 内存所有权规则 + demo 步骤。
 
-### M32：DDL 高阶语义（reaction guard）
+### M32：DDL 高阶语义（reaction guard）—— 下一步
 
 - 引擎层：`ReactionDef` 新增 `guard: Option<String>`；`send_event_internal` 派发 reaction 前求值 guard。
 - DDL：`reaction { when <sig> enters <state> [when <guard>] -> <tgt_sig> <event> }` 的守卫不再报错，编译到 `ReactionDef.guard`。
