@@ -232,6 +232,91 @@ pub fn format_trace(event: &TraceEvent) -> String {
     }
 }
 
+/// Pure helper behind the `sts` `why` command (M41): collect every
+/// `ReactionGuardEvaluated` trace event for the reaction `from.state ->
+/// event` and format them for human consumption. Returns the text the command
+/// prints to stdout — kept separate from `cmd_why` so it can be unit-tested
+/// without capturing IO (same shape as `format_trace`).
+///
+/// * `from_signal` / `from_state` / `to_signal` / `event` identify the reaction
+///   exactly the way `ReactionGuardEvaluated` records it.
+/// * The output header names the reaction; each line carries the timestamp, the
+///   guard expression and its result (`true` / `false` / `error: <msg>`).
+/// * The summary line counts evaluations, how many fired (`true`) and how many
+///   were skipped (`false` or error).
+/// * If no matching event exists, the reaction was never evaluated — most often
+///   because `from_state` was never reached — and the returned string says so.
+///
+/// `ReactionGuardEvaluated` does not retain the payload that produced a result
+/// (the trace records guard + result; the payload lives on the corresponding
+/// `EventReceived` line). The guard expression and result are the core signal,
+/// so they are what we surface here.
+pub fn format_why(
+    traces: &[TraceEvent],
+    from_signal: &str,
+    from_state: &str,
+    to_signal: &str,
+    event: &str,
+) -> String {
+    let matched: Vec<&TraceEvent> = traces
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                TraceEvent::ReactionGuardEvaluated {
+                    reaction_from_signal,
+                    reaction_from_state,
+                    reaction_to_signal,
+                    reaction_event,
+                    ..
+                } if reaction_from_signal == from_signal
+                    && reaction_from_state == from_state
+                    && reaction_to_signal == to_signal
+                    && reaction_event == event
+            )
+        })
+        .collect();
+
+    if matched.is_empty() {
+        return "No guard evaluation found for that reaction (from_state may not have been reached yet)."
+            .to_string();
+    }
+
+    let mut fired = 0usize;
+    let mut skipped = 0usize;
+    let mut lines: Vec<String> = Vec::with_capacity(matched.len() + 2);
+    lines.push(format!(
+        "Guard evaluations for reaction {}.{} -> {}.{}:",
+        from_signal, from_state, to_signal, event
+    ));
+    for e in &matched {
+        if let TraceEvent::ReactionGuardEvaluated {
+            guard,
+            result,
+            timestamp_ms,
+            ..
+        } = e
+        {
+            if result == "true" {
+                fired += 1;
+            } else {
+                skipped += 1;
+            }
+            lines.push(format!(
+                "[{}] guard=`{}` result={}",
+                timestamp_ms, guard, result
+            ));
+        }
+    }
+    lines.push(format!(
+        "{} evaluation(s); {} fired, {} skipped.",
+        matched.len(),
+        fired,
+        skipped
+    ));
+    lines.join("\n")
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests for the pure helpers (collect_action_ids, format_trace).
 // ---------------------------------------------------------------------------
@@ -322,5 +407,61 @@ mod tests {
             timestamp_ms: 1002,
         });
         assert_eq!(line, "[1002] Rollbacked order: approved -> submitted");
+    }
+
+    #[test]
+    fn format_why_empty_when_no_matching_eval() {
+        let out = format_why(&[], "order", "approved", "inventory", "allocate");
+        assert_eq!(
+            out,
+            "No guard evaluation found for that reaction (from_state may not have been reached yet)."
+        );
+    }
+
+    #[test]
+    fn format_why_filters_to_one_reaction_and_summarizes() {
+        // Two reactions share `from_state == approved`; only the inventory one
+        // should match `why order approved inventory allocate`.
+        let traces = vec![
+            TraceEvent::ReactionGuardEvaluated {
+                signal_id: "order".to_string(),
+                reaction_from_signal: "order".to_string(),
+                reaction_from_state: "approved".to_string(),
+                reaction_to_signal: "inventory".to_string(),
+                reaction_event: "allocate".to_string(),
+                guard: "payload.auto == true".to_string(),
+                result: "true".to_string(),
+                timestamp_ms: 100,
+            },
+            TraceEvent::ReactionGuardEvaluated {
+                signal_id: "order".to_string(),
+                reaction_from_signal: "order".to_string(),
+                reaction_from_state: "approved".to_string(),
+                reaction_to_signal: "audit".to_string(),
+                reaction_event: "note".to_string(),
+                guard: "payload.auto == true".to_string(),
+                result: "true".to_string(),
+                timestamp_ms: 101,
+            },
+            TraceEvent::ReactionGuardEvaluated {
+                signal_id: "order".to_string(),
+                reaction_from_signal: "order".to_string(),
+                reaction_from_state: "approved".to_string(),
+                reaction_to_signal: "inventory".to_string(),
+                reaction_event: "allocate".to_string(),
+                guard: "payload.auto == true".to_string(),
+                result: "false".to_string(),
+                timestamp_ms: 200,
+            },
+        ];
+
+        let out = format_why(&traces, "order", "approved", "inventory", "allocate");
+        assert_eq!(
+            out,
+            "Guard evaluations for reaction order.approved -> inventory.allocate:\n\
+             [100] guard=`payload.auto == true` result=true\n\
+             [200] guard=`payload.auto == true` result=false\n\
+             2 evaluation(s); 1 fired, 1 skipped."
+        );
     }
 }

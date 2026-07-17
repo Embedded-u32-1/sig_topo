@@ -35,6 +35,7 @@ Commands:
   trace                                   print the trace log
   fail <action_id>                        force that action to fail (live rollback demo)
   reset                                   clear the forced-failure set
+  why <from> <state> <to> <event>         print guard evaluation trace for a reaction
   help                                    show this help
   quit / exit                             leave the shell
 ```
@@ -89,6 +90,39 @@ sts> trace
 ```
 
 With no events yet, `trace` prints `(no trace events)`.
+
+### `why <from> <state> <to> <event>`
+
+A reaction fires an event on another signal when its guard is true; when the
+guard is false (or fails to evaluate) the reaction is *skipped* silently.
+`why` shows the guard-evaluation trace the engine recorded (M38) for one
+reaction so you can see *why* it did or did not fire: the guard expression,
+the result (`true` / `false` / `error: <msg>`), and a tally over the whole
+session. The reaction is identified as `from.state -> to.event` (the
+`ReactionGuardEvaluated` trace fields):
+
+```
+sts> why order approved inventory allocate
+Guard evaluations for reaction order.approved -> inventory.allocate:
+[1784321081516] guard=`payload.auto == true` result=true
+[1784321081517] guard=`payload.auto == true` result=false
+2 evaluation(s); 1 fired, 1 skipped.
+```
+
+Use it after an event that *should* have triggered a reaction but didn't: the
+false line tells you exactly which guard blocked it. Matching is strict — the
+four fields must name a reaction that the engine actually evaluated. If the
+reaction was never evaluated (most commonly because `from_state` was never
+reached, so the reaction never ran), `why` reports that instead:
+
+```
+sts> why order shipped inventory allocate
+No guard evaluation found for that reaction (from_state may not have been reached yet).
+```
+
+`ReactionGuardEvaluated` records the guard expression and its result, not the
+payload that produced the result. To recover that payload, find the
+corresponding `EventReceived` line for the same signal in `trace`.
 
 ### `help` / `quit` / `exit`
 
@@ -271,4 +305,10 @@ sts> quit
 3. `trace` 里，`approve` 那次是 `ActionStarted order.reserve_inventory` → `ActionFailed ...` → `Rollbacked order: approved -> submitted`，**没有** `StateChanged order: submitted -> approved`——和 M19 事务回滚「`StateChanged` 缺席、`ActionFailed` + `Rollbacked` 到场」完全一致。
 4. `reset` 清空失败集合后，同样的 `approve` 再次走到 `approved`。
 
-这正是 `sts` 的定位：整条链路（含回滚现场）都能在 REPL 里观察到，无需写 Rust。
+> **Tip: debugging a reaction that did not fire.** The rollback trace shows
+> *why a transition failed* (an `ActionFailed` + `Rollbacked`), but a skipped
+> *reaction* leaves no such trace — its guard was simply false. Use `why
+> <from> <state> <to> <event>` (see above) to read the guard-evaluation trace
+> for that reaction and see exactly which guard blocked it.
+
+这正是 `sts` 的定位：整条链路（含回滚现场 + 反应守卫诊断）都能在 REPL 里观察到，无需写 Rust。

@@ -53,11 +53,20 @@ fn main() {
             Ok(Command::Fail { action_id }) => session.fail(&action_id),
             Ok(Command::Reset) => session.reset(),
             Ok(Command::Dot) => cmd_dot(&session),
+            Ok(Command::Why {
+                from_signal,
+                from_state,
+                to_signal,
+                event,
+            }) => cmd_why(&session, &from_signal, &from_state, &to_signal, &event),
             Ok(Command::Unknown(_)) => println!("Unknown command. Type 'help'."),
-            Err(ParseError::MissingEventArgs) => {
+            Err(ParseError::EventArgs) => {
                 println!("Usage: event <signal> <event> [json payload]");
             }
-            Err(ParseError::MissingFailActionId) => println!("Usage: fail <action_id>"),
+            Err(ParseError::FailActionId) => println!("Usage: fail <action_id>"),
+            Err(ParseError::WhyArgs) => {
+                println!("Usage: why <from_signal> <from_state> <to_signal> <event>");
+            }
         }
     }
 }
@@ -125,6 +134,12 @@ enum Command {
     },
     Reset,
     Dot,
+    Why {
+        from_signal: String,
+        from_state: String,
+        to_signal: String,
+        event: String,
+    },
     Unknown(String),
 }
 
@@ -132,8 +147,12 @@ enum Command {
 /// loop maps each variant to the right user-facing message.
 #[derive(Debug, PartialEq)]
 enum ParseError {
-    MissingEventArgs,
-    MissingFailActionId,
+    /// `event` was given without the required `<signal> <event>`.
+    EventArgs,
+    /// `fail` was given without the required `<action_id>`.
+    FailActionId,
+    /// `why` was given without the required `<from> <state> <to> <event>`.
+    WhyArgs,
 }
 
 /// Parse a raw REPL line into a `Command`. Pure: no IO, no engine, no globals.
@@ -148,7 +167,7 @@ fn parse_command(line: &str) -> Result<Command, ParseError> {
         None => Ok(Command::Unknown(String::new())),
         Some("event") => {
             if parts.len() < 3 {
-                return Err(ParseError::MissingEventArgs);
+                return Err(ParseError::EventArgs);
             }
             let signal = parts[1];
             let event = parts[2];
@@ -172,10 +191,21 @@ fn parse_command(line: &str) -> Result<Command, ParseError> {
             Some(id) => Ok(Command::Fail {
                 action_id: id.to_string(),
             }),
-            None => Err(ParseError::MissingFailActionId),
+            None => Err(ParseError::FailActionId),
         },
         Some("reset") => Ok(Command::Reset),
         Some("dot") => Ok(Command::Dot),
+        Some("why") => {
+            if parts.len() < 5 {
+                return Err(ParseError::WhyArgs);
+            }
+            Ok(Command::Why {
+                from_signal: parts[1].to_string(),
+                from_state: parts[2].to_string(),
+                to_signal: parts[3].to_string(),
+                event: parts[4].to_string(),
+            })
+        }
         Some(other) => Ok(Command::Unknown(other.to_string())),
     }
 }
@@ -246,6 +276,29 @@ fn cmd_dot(session: &StsSession) {
     print!("{}", session.engine.snapshot_dot());
 }
 
+/// `why <from> <state> <to> <event>` — print every `ReactionGuardEvaluated` trace
+/// event for the reaction `from.state -> to.event`, so a user can see why it
+/// fired (`result=true`), was skipped (`result=false`), or was skipped because
+/// the guard failed to evaluate (`result=error: ...`). The engine records one
+/// such event per reaction dispatch (M38); if none is found for the requested
+/// reaction, the from_state was likely never reached (so the reaction was never
+/// evaluated) and we say so.
+fn cmd_why(
+    session: &StsSession,
+    from_signal: &str,
+    from_state: &str,
+    to_signal: &str,
+    event: &str,
+) {
+    print!("{}", signal_topology::run::format_why(
+        session.engine.traces(),
+        from_signal,
+        from_state,
+        to_signal,
+        event,
+    ));
+}
+
 /// `help` — describe the available commands.
 fn cmd_help() {
     println!("Commands:");
@@ -255,6 +308,7 @@ fn cmd_help() {
     println!("  dot                                     print runtime-highlighted DOT");
     println!("  fail <action_id>                        force that action to fail");
     println!("  reset                                   clear forced-failure set");
+    println!("  why <from> <state> <to> <event>         print guard evaluation trace for a reaction");
     println!("  help                                    show this help");
     println!("  quit / exit                             leave the shell");
 }
@@ -309,10 +363,10 @@ mod tests {
 
     #[test]
     fn parse_event_missing_args_is_error() {
-        assert_eq!(parse_command("event"), Err(ParseError::MissingEventArgs));
+        assert_eq!(parse_command("event"), Err(ParseError::EventArgs));
         assert_eq!(
             parse_command("event order"),
-            Err(ParseError::MissingEventArgs)
+            Err(ParseError::EventArgs)
         );
     }
 
@@ -335,9 +389,32 @@ mod tests {
         );
         assert_eq!(
             parse_command("fail").unwrap_err(),
-            ParseError::MissingFailActionId
+            ParseError::FailActionId
         );
         assert_eq!(parse_command("reset").unwrap(), Command::Reset);
+    }
+
+    #[test]
+    fn parse_why_four_args() {
+        let cmd = parse_command("why order approved inventory allocate").unwrap();
+        assert_eq!(
+            cmd,
+            Command::Why {
+                from_signal: "order".to_string(),
+                from_state: "approved".to_string(),
+                to_signal: "inventory".to_string(),
+                event: "allocate".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_why_missing_args_is_error() {
+        assert_eq!(parse_command("why"), Err(ParseError::WhyArgs));
+        assert_eq!(
+            parse_command("why order approved inventory"),
+            Err(ParseError::WhyArgs)
+        );
     }
 
     #[test]
