@@ -12,48 +12,79 @@
 use super::lexer::Token;
 use super::TokenKind;
 
+/// A parsed DDL document: one signal declaration per `signal` block plus the
+/// cross-signal `reaction` blocks that follow.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DdlDoc {
+    /// The declared signals, in source order.
     pub signals: Vec<SignalDecl>,
+    /// The declared reactions, in source order.
     pub reactions: Vec<ReactionDecl>,
 }
 
+/// A single `signal` declaration: its id, state space, initial state and the
+/// transitions out of it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SignalDecl {
+    /// The signal's unique id.
     pub id: String,
+    /// The full set of states the signal may occupy.
     pub states: Vec<String>,
+    /// The state the signal starts in (a member of `states`).
     pub initial: String,
+    /// The transitions declared under this signal, in source order.
     pub transitions: Vec<TransDecl>,
 }
 
+/// One `on <event> from <src> -> <tgt>` clause, optionally guarded and bound to
+/// lifecycle actions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransDecl {
+    /// The event name that triggers this transition.
     pub event: String,
+    /// The source state, or `*` for the wildcard that matches any state.
     pub from: String,
+    /// The target state.
     pub to: String,
+    /// An optional guard expression; the transition is blocked on `false`.
     pub guard: Option<String>,
+    /// The lifecycle actions bound to this transition. Defaults to empty.
     pub actions: DdlActionBinding,
 }
 
+/// The lifecycle actions bound to a transition, in the order the engine runs
+/// them: `on_exit` → `on_transition` → `on_enter`. Each phase binds zero or
+/// more action ids (comma-separated in the source).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DdlActionBinding {
+    /// Actions run before leaving the source state.
     pub on_exit: Vec<String>,
+    /// Actions run after tentatively entering the target state.
     pub on_transition: Vec<String>,
+    /// Actions run after the transition has committed.
     pub on_enter: Vec<String>,
 }
 
 impl DdlActionBinding {
+    /// `true` when no phase binds any action.
     pub fn is_empty(&self) -> bool {
         self.on_exit.is_empty() && self.on_transition.is_empty() && self.on_enter.is_empty()
     }
 }
 
+/// A single `reaction` declaration: when `from_signal` enters `from_state`,
+/// deliver `event` to `to_signal`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReactionDecl {
+    /// The signal whose state change triggers the cascade.
     pub from_signal: String,
+    /// The state that triggers the cascade.
     pub from_state: String,
+    /// The signal that receives the derived event.
     pub to_signal: String,
+    /// The event delivered to the target signal.
     pub event: String,
+    /// An optional guard expression; the reaction is skipped on `false`.
     pub guard: Option<String>,
     /// The raw source text of an optional `with { ... }` static payload block,
     /// e.g. `{ "auto": true }`. `None` when the reaction carries no payload.

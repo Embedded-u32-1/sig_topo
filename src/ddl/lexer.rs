@@ -9,12 +9,20 @@
 
 use super::TokenKind;
 
+/// A single lexical token, carrying its kind plus the location spans the parser
+/// needs to report errors (`line`/`col`) and slice guard expressions verbatim
+/// from the source (`start`/`len`, in bytes).
 #[derive(Debug, Clone)]
 pub struct Token {
+    /// The token's kind (identifier, keyword, symbol, literal).
     pub kind: TokenKind,
+    /// The 1-based source line where the token begins.
     pub line: usize,
+    /// The 1-based source column where the token begins.
     pub col: usize,
+    /// The byte offset of the token's first character in the source.
     pub start: usize,
+    /// The token's length in bytes.
     pub len: usize,
 }
 

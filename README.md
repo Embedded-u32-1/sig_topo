@@ -44,6 +44,16 @@ cargo run --bin stc -- --check <in.ddl>
 
 `stc --check` prints non-blocking warnings to stderr and still writes the JSON — warnings never abort the run or change the exit code. See [doc/ddl.md](doc/ddl.md) "Linting with `stc --check`".
 
+# Run the WASM browser demo
+
+```bash
+wasm-pack build --target web --out-dir pkg --release -p wasm-topology
+python3 -m http.server 8080 -d .        # serve the repo root over http
+# open http://localhost:8080/demo/index.html
+```
+
+The demo loads `order_approval` in the browser: edit the topology, step through `submit` / `approve` / `ship`, and watch the state pill, live DOT and traces pane update. See [doc/wasm.md](doc/wasm.md).
+
 `sts` (signal-topology-shell) loads a topology and drops you into a REPL where you can send events, inspect state, and print the trace log one step at a time. Walk-throughs: [examples/order_approval.md](examples/order_approval.md), [examples/gate_flow.md](examples/gate_flow.md). Full command reference: [doc/shell.md](doc/shell.md).
 
 ## Modules
@@ -59,6 +69,7 @@ cargo run --bin stc -- --check <in.ddl>
 | `export`    | `to_dot`: render a topology to Graphviz DOT for visualization. |
 | `run`       | Shared scaffolding for the `sts` / `stt` / `stp` binaries: builds a runnable engine from a topology + fail-set. Not a stable library API. |
 | `ddl`       | Domain Description Language compiler: `.ddl` source → `TopologySchema` (JSON model). |
+| `check`     | Semantic checks for `stc --check`: report suspicious patterns (self-loops, unreachable states) as non-blocking warnings. |
 
 ## Documentation
 
@@ -72,7 +83,9 @@ cargo run --bin stc -- --check <in.ddl>
 - [Transaction](doc/transaction.md) — single-signal transactional rollback semantics (v0.8).
 - [Run module](doc/run.md) — shared `sts`/`stt`/`stp` scaffolding (not a stable library API).
 - [DDL](doc/ddl.md) — the Domain Description Language: write `.ddl` instead of JSON, compile with `stc`.
+- [Check](doc/ddl.md) — linting with `stc --check` (self-loops, unreachable states).
 - [Scenarios](doc/scenarios.md) — the `examples/scenarios/` regression + teaching library (each scenario is a self-contained `.ddl` + `.scenario.json` + `EXPECTED.md` walk-through).
+- [WASM](doc/wasm.md) — `wasm-bindgen` surface + browser / Node demo.
 - [Roadmap](doc/roadmap.md) — milestone history and upcoming direction.
 
 ## Tests
@@ -81,7 +94,7 @@ cargo run --bin stc -- --check <in.ddl>
 cargo test
 ```
 
-138 tests across unit, integration, CLI, and doctest files. All should pass with zero failures before merging.
+177 tests across unit, integration, CLI, and doctest files. All should pass with zero failures before merging.
 
 ## License
 
