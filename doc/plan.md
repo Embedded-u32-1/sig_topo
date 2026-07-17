@@ -5,9 +5,9 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.11 M28 ✅（c67429b）+ M29 ✅（1280a72，137 测试绿）；下一步 M30（项目成熟度收尾）。**
+当前阶段：**v0.11 全收口 —— M28 ✅（c67429b）+ M29 ✅（1280a72）+ M30 ✅（b15bcfb）；138 测试绿，version 0.2.0。v0.11 完成。**
 
-最近完成的工作（M29）：
+最近完成的工作（M30）：
 
 - `Cargo.toml` 注册 `sts` bin；`src/bin/sts.rs`（225 行，含 `event` / `state` / `trace` / `help` / `quit` + print-and-record 动作）；`tests/sts_test.rs`（3 个集成测试：正常跃迁 / 失败回滚 / state-trace 读取路径）。
 - 编译验证发现 sts.rs 对 engine API 的调用与真实签名**完全一致**，零修改；引擎零改动、未新增依赖。
@@ -199,7 +199,7 @@ reaction {
 - 测试：`to_dot_with_state` 初始态 vs 非初始态节点属性不同；`engine.snapshot_dot()` 包含当前态高亮。
 - 文档：`doc/visualization.md` 补"运行时高亮"节。
 
-### M30：项目成熟度收尾（doc-comments + version bump）—— 下一步
+### M30：项目成熟度收尾（doc-comments + version bump）✅（commit b15bcfb）
 
 **目标**：把 already-complete 的工程收拾体面。
 
@@ -217,7 +217,7 @@ reaction {
 
 - 具体实现与端到端审核：委托子代理（Agent）。
 - 本进程负责：路线判断、计划记录、提交计划文档、按代理反馈把新事实更新到本计划。
-- 当前：M28 ✅ M29 ✅；下一步委托 M30（项目成熟度收尾：doc-comments + version bump + README 五 CLI）。
+- 当前：M28 ✅ M29 ✅ M30 ✅；v0.11 全收口。下一步方向待判断（见下）。
 
 ### M28 收口观察（留给后续轮次，不阻塞 M28）
 
@@ -225,3 +225,24 @@ reaction {
 2. 动作块 `{ }` 可选（agent 偏离决策），无动作的转换无需空 `{}`，合理降噪。
 3. AST 类型本地化（parser 自有 DdlDoc 等），与 serde 解耦；codegen 做 1:1 映射。
 4. `TopologySchema` 仅 Deserialize，故 stc.rs 手写字段→serde_json::Value 映射。
+
+### M30 收口观察（留给后续轮次，不阻塞 M30）
+
+1. lib.rs doctest 使用 `tests/topology.json` 端到端演示，是该 crate 第一个 doctest；若未来 fixture 路径/信号名变化需同步，注意"文档即测试"的双面性。
+2. README 测试数现在反映真实总数（含 doctest，138）；每次新增 doctest 后记得同步，避免漂移。
+3. agent 初写 README 测试数为 137（pre-M30 基线）；我据实修正为 138。
+
+## v0.11 完成后的下一步方向判断
+
+v0.11（M28 DDL + M29 snapshot_dot + M30 成熟度）全收口。项目现状：五 CLI（stv/stt/stp/sts/stc）、138 测试、engine/guard/compose/persist/trace/ddl/export 全模块 doc-commented、version 0.2.0。
+
+候选后续方向（暂不排期，待下次"踏着想法路线"指令时采纳或另指）：
+
+| 方向 | 说明 |
+|------|------|
+| D：多语言绑定 | 原路线图 M24（WASM/C-ABI），让非 Rust 业务代码驱动引擎。依赖跨平台需求。 |
+| E：DDL 生态扩展 | LSP/高亮、`stc --watch` 监视重编、DDL → 多目标（JSON / DOT / 文档）一行出。 |
+| F：运行时增强 | reaction 守卫（ReactionDef 加 guard 字段，DDL 编译器已预留）、跨信号分布式事务。 |
+| G：示例/场景库 | 把 DDL 示例扩成"场景即测试"的回归库（订单审批 / 门控 / 任务调度 / 故障保护）。 |
+
+本次不自动推进；等待下一步指令。
