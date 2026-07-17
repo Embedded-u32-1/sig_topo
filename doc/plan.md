@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.9（M21 3392cc8 + M22 f7acdd）、v0.10 M23（eb3e910）、自定 M25（b6aac90）、自定 M26（ed16f15）均收口；模拟调试层（sts 交互式 + stt scenario 回放）完整覆盖回滚演示，sts/stt 重复代码已抽出共享。进入空闲决策点。**
+当前阶段：**v0.9（M21 3392cc8 + M22 f79acdd）、v0.10 M23（eb3e910）、自定 M25（b6aac90）、自定 M26（ed16f15）、自定 M27（2efeff2）均收口；四 CLI bin（sts/stt/stp 走 run::，stv 直用 schema-only 加载合理不动）统一，README 过时数字与 run 文档补齐。进入空闲决策点。**
 
 最近完成的工作（M21）：
 
@@ -97,6 +97,22 @@
 2. fail_actions 若列出不存在的 action id 会报 ActionNotFound 而非 ActionExecutionError，行为不同；可在 stt 加 fixture 校验（防 typo），本轮未做。
 3. src/run.rs 是 pub mod 暴露为库表面，文档注释已说明是 bin 共享脚手架非稳定 API；未来可收敛为 pub(crate)。
 4. 实跑中发现并修复 bug：错误态应在该事件发生时立即捕获存入 ScenarioError，否则会被后续事件覆盖。
+
+### M27：收口 stp 接入 run:: + 修 README/run 文档（自定，本轮）
+
+健康扫描发现 M26 收口后的"最后一公里"：stp 是唯一仍自持重复加载逻辑的 bin（本地 `load_topology_for_run` 108 行 + `Scenario` 不含 `fail_actions`），且 README 写「71 tests」实际 100、`run` 模块与 `transaction.md` 链接缺失。
+
+- [x] stp.rs 切到 run::：删出自持 Scenario/ScenarioEvent/load_topology_for_run（130→96 行，净减 34 行）；用 run::load_topology_for_run + run_scenario；save 子命令回放改用 run::run_scenario（record=false，错误报告到 stderr 但不中断）。
+- [x] lib.rs 给 `pub mod run;` 加 doc comment（bin 共享脚手架、非稳定 API）。
+- [x] README：测试数 71 → 100；Modules 表补 run 行；doc 导航补 transaction.md 与 doc/run.md 链接。
+- [x] 验证：四 bin 全绿；cargo test 100 passed；clippy 零警告；stp save 与 stp reload 实跑通过（order_approval → shipped，reload 后保持 shipped）。
+- [x] doc/run.md 新建（50 行）：exports 表 + fail_actions 语义 + 与 sts/stt/stp 关系。
+- [x] 提交 `2efeff2`：4 files / +78 / −53。
+
+观察（留给后续轮次，不阻塞 M27）：
+
+1. stp 的 fail_actions 是新增额外能力，但 stp 回放后不打印 trace（只 save_state）；要看注入失败的具体 action/rollback 行需额外调 format_trace——当前未做。
+2. 健康扫描候选 B（补 engine/schema/error 单元测试 + 错误路径 fixture）与候选 C（版本 bump 0.1.0 → 0.2.0 / 发布准备）仍未做，可作为下轮方向。
 
 ### M24：v0.11 WASM 多语言绑定（低优先级，依赖团队跨平台需求再排期，暂不排）
 
