@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "wasm-topology"]
+
 [package]
 name = "signal-topology"
 version = "0.2.0"

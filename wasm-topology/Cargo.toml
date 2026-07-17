@@ -1,0 +1,26 @@
+[package]
+name = "wasm-topology"
+version = "0.2.0"
+edition = "2021"
+description = "M35: wasm-bindgen wrapper exposing signal-topology's TopologyEngine to the browser / Node."
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The engine crate itself -- the only "local" dependency. The main crate adds
+# no new Rust dependencies for this milestone; everything it needs (serde,
+# serde_json, thiserror) is already in its own dependency graph.
+signal-topology = { path = ".." }
+# The single brand-new Rust dependency for M35: drives the wasm glue.
+wasm-bindgen = "0.2"
+# Needed to parse the incoming event JSON and to hand-roll the result JSON
+# (the engine's public types have no serde::Serialize derive). Already a
+# transitive dep via signal-topology, declared direct for the glue code.
+serde_json = "1"
+
+[dev-dependencies]
+# Lets us write `#[wasm_bindgen_test]` that run in a browser / headless wasm
+# environment via `wasm-pack test` (or `wasm-bindgen-test-runner`).
+wasm-bindgen-test = "0.3"

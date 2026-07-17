@@ -570,4 +570,156 @@ impl TopologyEngine {
     pub fn clear_traces(&mut self) {
         self.trace.clear();
     }
+
+    /// Collect every action id referenced by the engine's transitions,
+    /// deduplicated and sorted for deterministic registration.
+    ///
+    /// `transitions` is `pub(crate)`, so language-binding crates (C-ABI, WASM)
+    /// that live outside this crate cannot scan them directly. This helper
+    /// lets those bindings pre-register every action as a no-op, exactly as
+    /// `crate::ffi::engine_new` does, without exposing the internals.
+    pub fn action_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .transitions
+            .iter()
+            .flat_map(|t| t.actions.all_actions().into_iter().cloned())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    /// Serialize the entire trace log to a JSON array string.
+    ///
+    /// `TraceEvent` deliberately has no `serde::Serialize` derive, and the WASM
+    /// surface cannot hand-roll it atop `traces()` alone (the trace lives behind
+    /// the engine). This helper produces the same representation as
+    /// `crate::ffi::trace_to_value`: each element carries `signal_id`,
+    /// `timestamp_ms`, a `kind` discriminator, and kind-specific fields. It is
+    /// also covered by the unit test `unit_traces_json_well_formed` in this file.
+    pub fn traces_json(&self) -> String {
+        let events: Vec<Value> = self.trace.events().iter().map(trace_event_to_value).collect();
+        Value::from(events).to_string()
+    }
+}
+
+/// Hand-write a `TraceEvent` to a JSON value, mirroring the representation
+/// produced by `crate::ffi::trace_to_value`. Kept here as a private helper so
+/// both the FFI surface and the WASM surface agree on the JSON shape without
+/// touching the `TraceEvent` type.
+fn trace_event_to_value(e: &TraceEvent) -> Value {
+    let mut v = serde_json::json!({
+        "signal_id": e.signal_id(),
+        "timestamp_ms": e.timestamp_ms(),
+    });
+    let obj = v.as_object_mut().expect("json! object is always an Object");
+    match e {
+        TraceEvent::EventReceived {
+            event, payload, ..
+        } => {
+            obj.insert("kind".into(), Value::from("EventReceived"));
+            obj.insert("event".into(), Value::from(event.clone()));
+            obj.insert(
+                "payload".into(),
+                payload.clone().map(Value::from).unwrap_or(Value::Null),
+            );
+        }
+        TraceEvent::ActionStarted { action_id, .. } => {
+            obj.insert("kind".into(), Value::from("ActionStarted"));
+            obj.insert("action_id".into(), Value::from(action_id.clone()));
+        }
+        TraceEvent::ActionSucceeded { action_id, .. } => {
+            obj.insert("kind".into(), Value::from("ActionSucceeded"));
+            obj.insert("action_id".into(), Value::from(action_id.clone()));
+        }
+        TraceEvent::ActionFailed {
+            action_id, error, ..
+        } => {
+            obj.insert("kind".into(), Value::from("ActionFailed"));
+            obj.insert("action_id".into(), Value::from(action_id.clone()));
+            obj.insert("error".into(), Value::from(error.clone()));
+        }
+        TraceEvent::StateChanged { from, to, .. } => {
+            obj.insert("kind".into(), Value::from("StateChanged"));
+            obj.insert("from".into(), Value::from(from.clone()));
+            obj.insert("to".into(), Value::from(to.clone()));
+        }
+        TraceEvent::Rollbacked { from, to, .. } => {
+            obj.insert("kind".into(), Value::from("Rollbacked"));
+            obj.insert("from".into(), Value::from(from.clone()));
+            obj.insert("to".into(), Value::from(to.clone()));
+        }
+    }
+    v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ORDER_APPROVAL: &str = include_str!("../examples/order_approval.json");
+
+    fn engine_with_noops() -> TopologyEngine {
+        let mut engine = TopologyEngine::from_json(ORDER_APPROVAL).expect("fixture parses");
+        for id in engine.action_ids() {
+            let id = id.clone();
+            engine.register_action(&id, |_| Ok(()));
+        }
+        engine
+    }
+
+    #[test]
+    fn unit_action_ids_deduped_and_sorted() {
+        let engine = TopologyEngine::from_json(ORDER_APPROVAL).expect("fixture parses");
+        let ids = engine.action_ids();
+        // order_approval references 9 unique action ids across its transitions.
+        assert_eq!(ids.len(), 9, "expected 9 unique action ids, got {:?}", ids);
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted, "action_ids should be returned sorted");
+        let deduped: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(deduped.len(), ids.len(), "action_ids should be deduplicated");
+    }
+
+    #[test]
+    fn unit_traces_json_well_formed() {
+        let mut engine = engine_with_noops();
+        assert!(
+            engine.send_event("order", "submit", None).is_ok(),
+            "submit should succeed with no-op actions"
+        );
+
+        let json = engine.traces_json();
+        let parsed: Value =
+            serde_json::from_str(&json).expect("traces_json should produce valid JSON");
+        assert!(parsed.is_array(), "traces should serialize to a JSON array");
+        let arr = parsed.as_array().unwrap();
+        assert!(!arr.is_empty(), "submit should emit at least one trace event");
+
+        // Every event carries the common fields and a kind discriminator.
+        for e in arr {
+            assert!(e.get("signal_id").is_some(), "event should carry signal_id");
+            assert!(
+                e.get("timestamp_ms").is_some(),
+                "event should carry timestamp_ms"
+            );
+            assert!(e.get("kind").is_some(), "event should carry a kind field");
+        }
+
+        // The first event is the EventReceived for submit.
+        let first = &arr[0];
+        assert_eq!(first["kind"], "EventReceived");
+        assert_eq!(first["event"], "submit");
+    }
+
+    #[test]
+    fn unit_traces_json_round_trip_reaches_shipped() {
+        let mut engine = engine_with_noops();
+        assert!(engine.send_event("order", "submit", None).is_ok());
+        assert!(engine
+            .send_event("order", "approve", Some(serde_json::json!({"amount": 5000})))
+            .is_ok());
+        assert!(engine.send_event("order", "ship", None).is_ok());
+        assert_eq!(engine.get_state("order").unwrap(), "shipped");
+    }
 }

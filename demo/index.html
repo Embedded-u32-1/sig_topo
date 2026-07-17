@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>signal-topology · M35 WASM demo</title>
+  <style>
+    :root { --fg: #e7e7ea; --bg: #16161c; --muted: #9aa0b4; --accent: #6ea8fe; --ok: #5fd28b; --err: #ff7b7b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--bg); color: var(--fg); }
+    header { padding: 16px 20px; border-bottom: 1px solid #2a2a35; }
+    header h1 { margin: 0; font-size: 16px; }
+    header p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px 20px; }
+    section { background: #1c1c24; border: 1px solid #2a2a35; border-radius: 8px; padding: 14px; }
+    h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+    label { display: block; margin: 8px 0 4px; color: var(--muted); font-size: 12px; }
+    textarea { width: 100%; height: 220px; resize: vertical; background: #111117; color: var(--fg); border: 1px solid #2a2a35; border-radius: 6px; padding: 8px; font: inherit; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    input[type=text] { flex: 1; min-width: 120px; background: #111117; color: var(--fg); border: 1px solid #2a2a35; border-radius: 6px; padding: 8px; font: inherit; }
+    button { background: var(--accent); color: #0b0b0f; border: 0; border-radius: 6px; padding: 8px 12px; font: inherit; font-weight: 600; cursor: pointer; }
+    button.secondary { background: #2a2a35; color: var(--fg); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    pre { background: #111117; border: 1px solid #2a2a35; border-radius: 6px; padding: 10px; overflow: auto; white-space: pre-wrap; word-break: break-word; min-height: 60px; }
+    #dot { min-height: 120px; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; }
+    .pill.ok { background: #103a23; color: var(--ok); }
+    .pill.err { background: #3a1010; color: var(--err); }
+    footer { padding: 8px 20px 24px; color: var(--muted); font-size: 12px; }
+    code { color: var(--accent); }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>signal-topology &middot; M35 WASM demo</h1>
+    <p>The full <code>TopologyEngine</code> runs in your browser via <code>wasm-bindgen</code>:
+       load a JSON topology, send events, watch the live state / DOT / traces update.</p>
+  </header>
+
+  <main>
+    <section>
+      <h2>1. Topology</h2>
+      <label for="topology">JSON topology (default: order_approval)</label>
+      <textarea id="topology" spellcheck="false"></textarea>
+      <div class="row" style="margin-top:8px;">
+        <button id="load">Compile &amp; Load</button>
+        <button id="reset-topo" class="secondary">Reset to default</button>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <span id="load-state" class="pill">no engine</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. Send event</h2>
+      <label for="signal-id">signal_id</label>
+      <input type="text" id="signal-id" value="order" />
+      <label for="event">event</label>
+      <input type="text" id="event" value="submit" />
+      <label for="payload">payload (JSON, optional)</label>
+      <input type="text" id="payload" placeholder='e.g. {"amount": 5000} or blank' />
+      <div class="row" style="margin-top:8px;">
+        <button id="send">send_event</button>
+        <button id="quick-submit" class="secondary">submit</button>
+        <button id="quick-approve" class="secondary">approve {amount:5000}</button>
+        <button id="quick-ship" class="secondary">ship</button>
+      </div>
+      <label style="margin-top:10px;">result</label>
+      <pre id="event-result">—</pre>
+    </section>
+
+    <section>
+      <h2>3. State &amp; Signals</h2>
+      <div class="row">
+        <button id="refresh-state" class="secondary">get_state(order)</button>
+        <span id="state-pill" class="pill">—</span>
+      </div>
+      <label style="margin-top:10px;">all signals</label>
+      <pre id="signals">—</pre>
+    </section>
+
+    <section>
+      <h2>4. Snapshot DOT (live highlight)</h2>
+      <div class="row">
+        <button id="snapshot" class="secondary">snapshot_dot</button>
+        <span class="muted" style="font-size:11px;">current state node is filled <span style="color:lightgreen">lightgreen</span></span>
+      </div>
+      <div id="dot" style="margin-top:10px;"></div>
+      <details style="margin-top:8px;">
+        <summary style="cursor:pointer;color:var(--muted);font-size:12px;">raw DOT source</summary>
+        <pre id="dot-src">—</pre>
+      </details>
+    </section>
+
+    <section style="grid-column: 1 / -1;">
+      <h2>5. Traces</h2>
+      <div class="row">
+        <button id="traces" class="secondary">get_traces</button>
+        <button id="clear-traces" class="secondary">clear</button>
+      </div>
+      <pre id="traces">—</pre>
+    </section>
+  </main>
+
+  <footer>
+    Built from <code>wasm-topology</code> via <code>wasm-pack build --target web</code>
+    (<code>wasm-topology/build.sh</code>). Serve <code>pkg/</code> over http — WASM load
+    is blocked on <code>file://</code>. viz.js (Graphviz rendering) is loaded from CDN; the
+    raw DOT source is always available above if the CDN is unreachable.
+  </footer>
+
+  <!-- viz.js for rendering DOT; optional (the raw source fallback is always shown). -->
+  <script src="https://unpkg.com/@hpcc-js/wasm@2.14.1/dist/graphviz.umd.js"></script>
+  <script src="https://unpkg.com/viz.js@2.1.2/viz.js"></script>
+
+  <script type="module">
+    import init, { WasmEngine } from './pkg/wasm_topology.js';
+
+    const $ = (id) => document.getElementById(id);
+    const DEFAULT_TOPO = `{
+  "version": "0.1",
+  "signals": [{ "id": "order", "initial_state": "draft",
+               "states": ["draft","submitted","approved","rejected","shipped"] }],
+  "transitions": [
+    { "signal_id":"order","from":"draft","event":"submit","to":"submitted",
+      "actions":{"on_exit":["log_draft_exit"],"on_transition":["validate_order_payload"],"on_enter":["notify_submitted"]} },
+    { "signal_id":"order","from":"submitted","event":"approve","to":"approved",
+      "guard":"payload.amount > 0 and payload.amount <= 100000",
+      "actions":{"on_transition":["reserve_inventory"],"on_enter":["notify_customer_approved"]} },
+    { "signal_id":"order","from":"submitted","event":"reject","to":"rejected",
+      "actions":{"on_transition":["release_hold"],"on_enter":["notify_customer_rejected"]} },
+    { "signal_id":"order","from":"approved","event":"ship","to":"shipped",
+      "actions":{"on_transition":["dispatch_order"],"on_enter":["notify_shipped"]} }
+  ]
+}`;
+
+    let engine = null;
+    $('topology').value = DEFAULT_TOPO;
+
+    const graphviz = typeof Viz !== 'undefined' && Viz.Worker
+      ? new Viz.Worker() : null;
+
+    function setPill(el, text, kind) {
+      el.textContent = text;
+      el.className = 'pill ' + (kind || '');
+    }
+
+    function renderDot(dotSrc) {
+      $('dot-src').textContent = dotSrc;
+      if (!graphviz) { $('dot').textContent = '(viz.js unavailable — see raw DOT above)'; return; }
+      graphviz.renderSVGElement(dotSrc).then(svg => {
+        svg.setAttribute('width', '100%');
+        $('dot').innerHTML = '';
+        $('dot').appendChild(svg);
+      }).catch(err => {
+        $('dot').textContent = 'render error: ' + err + '\n(see raw DOT above)';
+      });
+    }
+
+    async function boot() {
+      await init();
+      $('load').addEventListener('click', () => {
+        try {
+          engine = new WasmEngine($('topology').value);
+          setPill($('load-state'), 'engine ready', 'ok');
+          // This wrapper does not (yet) expose signal_ids(); the default
+          // order_approval topology has the single "order" signal.
+          $('signals').textContent = JSON.stringify(['order']);
+        } catch (e) {
+          engine = null;
+          setPill($('load-state'), 'load failed', 'err');
+          $('signals').textContent = 'ERROR: ' + e;
+        }
+      });
+
+      $('reset-topo').addEventListener('click', () => { $('topology').value = DEFAULT_TOPO; });
+
+      function current() {
+        if (!engine) { $('event-result').textContent = 'Load a engine first (Compile & Load).'; return null; }
+        return engine;
+      }
+
+      function doSend(signalId, event, payloadTxt) {
+        const eng = current(); if (!eng) return;
+        let payload = undefined;
+        if (payloadTxt && payloadTxt.trim() !== '') {
+          try { payload = JSON.parse(payloadTxt); }
+          catch (e) { $('event-result').textContent = 'bad payload JSON: ' + e; return; }
+        }
+        const obj = { signal_id: signalId, event };
+        if (payload !== undefined) obj.payload = payload;
+        try {
+          const json = eng.send_event(JSON.stringify(obj));
+          const res = JSON.parse(json);
+          $('event-result').textContent = JSON.stringify(res, null, 2);
+          setPill($('state-pill'), 'order = ' + (eng.get_state('order') ?? '?'), 'ok');
+        } catch (e) {
+          $('event-result').textContent = 'ERROR: ' + e;
+        }
+      }
+
+      $('send').addEventListener('click', () => doSend($('signal-id').value, $('event').value, $('payload').value));
+      $('quick-submit').addEventListener('click', () => { $('event').value='submit'; doSend('order','submit',''); });
+      $('quick-approve').addEventListener('click', () => doSend('order','approve','{"amount":5000}'));
+      $('quick-ship').addEventListener('click', () => doSend('order','ship',''));
+
+      $('refresh-state').addEventListener('click', () => {
+        const eng = current(); if (!eng) return;
+        const s = eng.get_state('order');
+        setPill($('state-pill'), 'order = ' + (s ?? '(unknown)'), s ? 'ok' : 'err');
+      });
+
+      $('snapshot').addEventListener('click', () => {
+        const eng = current(); if (!eng) return;
+        const dot = eng.snapshot_dot();
+        renderDot(dot);
+      });
+
+      $('traces').addEventListener('click', () => {
+        const eng = current(); if (!eng) return;
+        try {
+          const json = eng.get_traces();
+          $('traces').textContent = JSON.stringify(JSON.parse(json), null, 2);
+        } catch (e) { $('traces').textContent = 'ERROR: ' + e; }
+      });
+
+      $('clear-traces').addEventListener('click', () => { $('traces').textContent = 'cleared (reload engine to reset)'; });
+    }
+
+    boot().catch(err => {
+      document.body.insertAdjacentHTML('afterbegin',
+        '<div style="background:#3a1010;color:#ff7b7b;padding:10px;font-family:monospace;">'
+        + 'Failed to init WASM: ' + err + '</div>');
+    });
+  </script>
+</body>
+</html>
