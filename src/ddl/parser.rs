@@ -87,7 +87,14 @@ pub struct ReactionDecl {
     /// The event delivered to the target signal.
     pub event: String,
     /// An optional guard expression; the reaction is skipped on `false`.
+    /// After resolution this is always the *expanded* expression text, even
+    /// when the source wrote a bare `when <id>` reference.
     pub guard: Option<String>,
+    /// The id of the top-level guard this reaction references via a bare
+    /// `when <id>`, if any; `None` when the guard is a literal expression or
+    /// absent. Set during resolution in `parse_doc`; lets `check_ddl`
+    /// (M39) determine which guard templates are actually referenced.
+    pub guard_ref: Option<String>,
     /// The raw source text of an optional `with { ... }` static payload block,
     /// e.g. `{ "auto": true }`. `None` when the reaction carries no payload.
     pub payload: Option<String>,
@@ -225,18 +232,21 @@ impl<'a> Parser<'a> {
         let reactions = raw_reactions
             .into_iter()
             .map(|r| {
-                let guard = match r.guard {
-                    None => None,
-                    Some(RawGuard::Lit(s)) => Some(s),
-                    Some(RawGuard::Ref(id)) => Some(
-                        guard_map
-                            .get(&id)
-                            .cloned()
-                            .ok_or_else(|| format!(
+                // M39: capture whether the reaction's guard is a reference to a
+                // top-level guard id so check_ddl can tell which templates are
+                // actually used. The expanded expression text lives in `guard`.
+                let (guard, guard_ref) = match r.guard {
+                    None => (None, None),
+                    Some(RawGuard::Lit(s)) => (Some(s), None),
+                    Some(RawGuard::Ref(id)) => {
+                        let expr = guard_map.get(&id).cloned().ok_or_else(|| {
+                            format!(
                                 "undefined guard '{}' referenced in reaction ({} enters {})",
                                 id, r.from_signal, r.from_state
-                            ))?,
-                    ),
+                            )
+                        })?;
+                        (Some(expr), Some(id))
+                    }
                 };
                 Ok(ReactionDecl {
                     from_signal: r.from_signal,
@@ -244,6 +254,7 @@ impl<'a> Parser<'a> {
                     to_signal: r.to_signal,
                     event: r.event,
                     guard,
+                    guard_ref,
                     payload: r.payload,
                 })
             })

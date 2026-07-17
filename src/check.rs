@@ -11,8 +11,9 @@
 // or a `--watch` mode. The schema alone does not carry line/column info, so
 // `line`/`col` stay `None`; enrich them later if check ever takes the AST.
 
+use crate::ddl::parser::{DdlDoc, ReactionDecl};
 use crate::schema::TopologySchema;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// A suspicious pattern found by `check_schema`. Warnings are non-blocking:
@@ -47,6 +48,14 @@ pub enum WarningKind {
     /// it is not the `to` target of any *other* state's transition. Such a
     /// state is dead — the engine can never occupy it.
     UnreachableState,
+    /// A top-level `guard <id> { ... }` declaration that no reaction
+    /// references via `when <id>`. The template is dead code — it is never
+    /// evaluated — so the user can delete it (or wire it up).
+    UnusedGuardTemplate,
+    /// Two or more top-level guard declarations with identical expression
+    /// text. They likely express the same condition expressed twice and could
+    /// be merged into one template referenced from both reactions.
+    DuplicateGuardCondition,
 }
 
 impl fmt::Display for WarningKind {
@@ -54,6 +63,8 @@ impl fmt::Display for WarningKind {
         match self {
             WarningKind::SelfLoop => write!(f, "self-loop"),
             WarningKind::UnreachableState => write!(f, "unreachable-state"),
+            WarningKind::UnusedGuardTemplate => write!(f, "unused-guard-template"),
+            WarningKind::DuplicateGuardCondition => write!(f, "duplicate-guard-condition"),
         }
     }
 }
@@ -117,6 +128,77 @@ pub fn check_schema(schema: &TopologySchema) -> Vec<CheckWarning> {
                     col: None,
                 });
             }
+        }
+    }
+
+    warnings
+}
+
+/// AST-level checks on the parsed `DdlDoc`, run by `stc --check` alongside the
+/// schema-level `check_schema`.
+///
+/// `check_schema` sees only the lowered `TopologySchema`, which has already
+/// expanded every `when <id>` guard reference into literal expression text — so
+/// it cannot tell whether a top-level guard template is used, or whether two
+/// templates repeat the same condition. This companion function runs over the
+/// AST (where `ReactionDecl.guard_ref` records the id each reaction references
+/// and `DdlDoc.guards` lists the templates) and surfaces the two lints that
+/// require that information. `schema` is accepted for symmetry with
+/// `check_schema` and to leave room for cross-level checks; it is not needed by
+/// the lints implemented today.
+///
+/// Two checks run today:
+///
+/// 1. **Unused guard template** — a top-level `guard <id> { ... }` declaration
+///    that no reaction references via `when <id>`. With no reference its
+///    expression is never evaluated, so it is dead code.
+/// 2. **Duplicate guard condition** — two or more top-level guard declarations
+///    with identical expression text. They likely express the same condition
+///    twice and could be merged into one template shared by the referencing
+///    reactions.
+pub fn check_ddl(doc: &DdlDoc, _schema: &TopologySchema) -> Vec<CheckWarning> {
+    let mut warnings = Vec::new();
+
+    // Collect the set of guard ids actually referenced by reactions. A
+    // reaction's `guard_ref` is `Some(id)` precisely when it was written as a
+    // bare `when <id>`; literal guards and unguarded reactions contribute
+    // nothing. A template id not present in this set is unused.
+    let referenced: HashSet<&str> = doc
+        .reactions
+        .iter()
+        .filter_map(|r: &ReactionDecl| r.guard_ref.as_deref())
+        .collect();
+
+    for g in &doc.guards {
+        if !referenced.contains(g.id.as_str()) {
+            warnings.push(CheckWarning {
+                kind: WarningKind::UnusedGuardTemplate,
+                message: format!("guard '{}' is declared but never referenced by a reaction", g.id),
+                line: None,
+                col: None,
+            });
+        }
+    }
+
+    // Group templates by their expression text. Any bucket with more than one
+    // id is a duplicate condition (regardless of whether the templates are
+    // referenced — declaring two identical unused templates is still a smell).
+    let mut by_expr: HashMap<&str, Vec<&str>> = HashMap::new();
+    for g in &doc.guards {
+        by_expr.entry(g.expr.as_str()).or_default().push(g.id.as_str());
+    }
+    for (expr, ids) in &by_expr {
+        if ids.len() > 1 {
+            warnings.push(CheckWarning {
+                kind: WarningKind::DuplicateGuardCondition,
+                message: format!(
+                    "guards [{}] share the same condition `{}`",
+                    ids.join(", "),
+                    expr
+                ),
+                line: None,
+                col: None,
+            });
         }
     }
 
@@ -220,6 +302,110 @@ mod tests {
         assert!(
             warnings.is_empty(),
             "clean linear schema should produce no warnings, got: {:?}",
+            warnings
+        );
+    }
+
+    // --- check_ddl (M39) ---
+
+    fn guard(id: &str, expr: &str) -> crate::ddl::GuardDecl {
+        crate::ddl::GuardDecl {
+            id: id.to_string(),
+            expr: expr.to_string(),
+        }
+    }
+
+    fn reaction_with_ref(from_signal: &str, id: Option<&str>) -> ReactionDecl {
+        ReactionDecl {
+            from_signal: from_signal.to_string(),
+            from_state: "paid".to_string(),
+            to_signal: "inv".to_string(),
+            event: "reserve".to_string(),
+            guard: Some("payload.amount <= 100".to_string()),
+            guard_ref: id.map(String::from),
+            payload: None,
+        }
+    }
+
+    fn empty_schema() -> TopologySchema {
+        TopologySchema {
+            version: "0.1".to_string(),
+            signals: vec![sig("s", &["a", "b"], "a")],
+            transitions: vec![],
+            reactions: Vec::new(),
+            components: None,
+            instances: Vec::new(),
+            includes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn unused_guard_template_detected() {
+        // `lonely` is declared but never referenced; `used` is referenced.
+        let doc = DdlDoc {
+            signals: vec![],
+            reactions: vec![reaction_with_ref("order", Some("used"))],
+            guards: vec![guard("used", "payload.amount <= 100"), guard("lonely", "payload.x == 1")],
+        };
+
+        let warnings = check_ddl(&doc, &empty_schema());
+        let unused: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.kind == WarningKind::UnusedGuardTemplate)
+            .collect();
+        assert_eq!(
+            unused.len(),
+            1,
+            "expected exactly one unused-guard warning, got: {:?}",
+            warnings
+        );
+        assert!(unused[0].message.contains("lonely"));
+    }
+
+    #[test]
+    fn duplicate_guard_condition_detected() {
+        // `g1` and `g2` declare identical expressions.
+        let doc = DdlDoc {
+            signals: vec![],
+            reactions: vec![reaction_with_ref("order", Some("g1"))],
+            guards: vec![guard("g1", "payload.amount <= 100"), guard("g2", "payload.amount <= 100")],
+        };
+
+        let warnings = check_ddl(&doc, &empty_schema());
+        let dup: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.kind == WarningKind::DuplicateGuardCondition)
+            .collect();
+        assert_eq!(
+            dup.len(),
+            1,
+            "expected exactly one duplicate-guard warning, got: {:?}",
+            warnings
+        );
+        assert!(dup[0].message.contains("g1"));
+        assert!(dup[0].message.contains("g2"));
+        // An undeclared duplicate is also unused, but it must still be flagged
+        // as a duplicate — both lints are independent.
+        assert!(warnings
+            .iter()
+            .any(|w| w.kind == WarningKind::UnusedGuardTemplate && w.message.contains("g2")));
+    }
+
+    #[test]
+    fn no_guard_warnings_when_all_used_and_unique() {
+        let doc = DdlDoc {
+            signals: vec![],
+            reactions: vec![
+                reaction_with_ref("order", Some("a")),
+                reaction_with_ref("order", Some("b")),
+            ],
+            guards: vec![guard("a", "payload.amount <= 100"), guard("b", "payload.amount > 0")],
+        };
+
+        let warnings = check_ddl(&doc, &empty_schema());
+        assert!(
+            warnings.is_empty(),
+            "all-used unique guards should produce no warnings, got: {:?}",
             warnings
         );
     }

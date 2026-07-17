@@ -10,8 +10,8 @@
 //   before the JSON is written: self-loops and unreachable states.
 
 use serde_json::{Map, Value};
-use signal_topology::check::check_schema;
-use signal_topology::ddl::compile;
+use signal_topology::check::{check_ddl, check_schema};
+use signal_topology::ddl::compile_full;
 use signal_topology::schema::{ActionBinding, TopologySchema};
 use std::env;
 use std::fs;
@@ -49,17 +49,24 @@ fn main() {
         exit(1);
     });
 
-    let schema = compile(&src).unwrap_or_else(|e| {
+    // M39: `compile_full` keeps the parsed `DdlDoc` AST alongside the lowered
+    // schema so `--check` can run AST-level guard lints (which need the
+    // top-level guard declarations and per-reaction guard references that
+    // codegen erases) in addition to the schema-level checks.
+    let (schema, ddl_doc) = compile_full(&src).unwrap_or_else(|e| {
         eprintln!("Failed to compile '{}': {}", input_path.display(), e);
         exit(1);
     });
 
-    // M36: `--check` runs the semantic checker and prints any warnings to
-    // stderr. It is non-blocking — warnings never abort the run or change
+    // M36/M39: `--check` runs the semantic checkers and prints any warnings to
+    // stderr. They are non-blocking — warnings never abort the run or change
     // the exit code — so the JSON below is still produced. When an output
     // path is also supplied the user gets both: warnings now, topology later.
+    // M39 adds AST-level guard lints (unused template / duplicate condition)
+    // on top of the schema-level self-loop and unreachable-state checks.
     if check {
-        let warnings = check_schema(&schema);
+        let mut warnings = check_schema(&schema);
+        warnings.extend(check_ddl(&ddl_doc, &schema));
         for w in &warnings {
             eprintln!("Warning: {}: {}", w.kind, w.message);
         }

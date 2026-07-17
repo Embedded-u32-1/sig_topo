@@ -249,6 +249,17 @@ expression, and a `result` that is `"true"` (reaction fired), `"false"`
 skipped). Together they answer "why did this reaction fire / not fire", and a
 shared guard shows identical `result` values across the reactions that share it.
 
+### Guard coordination scenario (M39)
+
+`examples/scenarios/guard_coordination/` is the canonical "payment success ->
+inventory decrement" teaching scenario for shared-guard coordination. A single
+`guard canreserve { payload.amount <= 100 }` template is referenced by *two*
+reactions (inventory reservation and audit clearing). Because both reactions
+share the one guard, they cannot diverge: a small payment (guard true) fires
+both, a large payment (guard false) skips both. The scenario is replayed by
+`all_scenario_dirs_pass` (`tests/scenarios_test.rs`), so the shared-guard
+consistency is covered by the automatic scenario regression suite.
+
 ### Wildcard `from *` (M34)
 
 A transition's `from` may be the wildcard `*`:
@@ -364,6 +375,8 @@ compiler's lowering faithfully.
 |----------------------|--------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
 | `self-loop`          | A transition with `from == to`; the engine stays in the same state.                        | `gate_flow`'s `on reset from * -> closed` lowers to a `closed -> closed` self-loop (harmless, but worth knowing). |
 | `unreachable-state`  | A signal state that is neither the initial state nor any other state's `to` target — dead. | An `obsolete` state that no transition ever enters.                                           |
+| `unused-guard-template` (M39) | A top-level `guard <id>` declaration no reaction references — dead code.            | A typo'd guard id that nothing wires up.                                                      |
+| `duplicate-guard-condition` (M39) | Two top-level guards with identical expression text — likely meant to be one shared template. | `guard g1 { payload.amount <= 100 }` and `guard g2 { payload.amount <= 100 }`.          |
 
 The `--check` output format:
 

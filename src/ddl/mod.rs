@@ -15,6 +15,13 @@ pub mod lexer;
 /// Recursive-descent parse tokens into a `DdlDoc` AST.
 pub mod parser;
 
+// Re-export the AST types so both `compile_full` (in this module) and the
+// AST-level checker (`crate::check`) can refer to them without reaching into
+// `parser` directly.
+pub use parser::DdlDoc;
+pub use parser::GuardDecl;
+pub use parser::ReactionDecl;
+
 use crate::error::EngineError;
 use crate::schema::TopologySchema;
 
@@ -91,4 +98,18 @@ pub fn compile(src: &str) -> Result<TopologySchema, EngineError> {
     let doc = parse(&tokens, src).map_err(EngineError::ParseError)?;
     let schema = codegen::emit(doc)?;
     Ok(schema)
+}
+
+/// Compile DDL source into both a `TopologySchema` and the parsed `DdlDoc` AST.
+///
+/// Like `compile`, but keeps the AST around so AST-level checks (`stc --int-)
+/// can inspect the top-level guard declarations and per-reaction guard
+/// references that are lost once codegen lowers the document to a schema. The
+/// schema is produced from a clone of the document; the returned AST is the
+/// original. Any failure is reported as an `EngineError`.
+pub fn compile_full(src: &str) -> Result<(TopologySchema, DdlDoc), EngineError> {
+    let tokens = tokenize(src).map_err(EngineError::ParseError)?;
+    let doc = parse(&tokens, src).map_err(EngineError::ParseError)?;
+    let schema = codegen::emit(doc.clone())?;
+    Ok((schema, doc))
 }

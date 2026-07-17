@@ -129,3 +129,90 @@ fn order_approval_reports_no_warnings() {
         "output should be valid JSON"
     );
 }
+
+// M39: `stc --check` runs AST-level guard lints in addition to the schema-level
+// self-loop / unreachable-state checks. These two tests exercise the new
+// `UnusedGuardTemplate` and `DuplicateGuardCondition` lints on inline DDL.
+
+/// Write `ddl` to a temp file under the crate's `target/` dir (outside the
+/// source tree) and run `stc --check` on it, returning the captured
+/// `(stdout, stderr)`. The JSON output path is derived from `out_name`.
+fn run_stc_check_ddl(ddl: &str, out_name: &str) -> (String, String) {
+    let out = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(format!("stc_check_{out_name}.json"));
+    let ddl_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(format!("stc_check_{out_name}.ddl"));
+    std::fs::write(&ddl_path, ddl).expect("temp ddl should be writable");
+
+    let (stdout, stderr) = run_stc_check(ddl_path.to_str().unwrap(), &out);
+    // Leave the temp files for inspection; they live under target/.
+
+    (stdout, stderr)
+}
+
+#[test]
+fn stc_check_reports_unused_guard_template() {
+    // `lonely` is declared at the top level but never referenced by a reaction;
+    // `used` is referenced. Only `lonely` should be flagged.
+    let ddl = r#"
+guard used {
+    payload.amount <= 100
+}
+guard lonely {
+    payload.x == 1
+}
+signal order {
+    states: [pending, paid]
+    initial: pending
+    on pay from pending -> paid
+}
+reaction {
+    when order enters paid -> order pay when used
+}
+"#;
+    let (_stdout, stderr) = run_stc_check_ddl(ddl, "unused_guard");
+
+    assert!(
+        stderr.contains("unused-guard-template"),
+        "expected an UnusedGuardTemplate warning on stderr, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("lonely"),
+        "expected the unused guard to be named, got:\n{stderr}"
+    );
+    // The used guard must NOT be reported as unused.
+    assert!(
+        !stderr.contains("unused guard 'used'"),
+        "`used` is referenced and must not be flagged, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn stc_check_reports_duplicate_guard_condition() {
+    // `g1` and `g2` declare identical expressions; both should be reported.
+    let ddl = r#"
+guard g1 {
+    payload.amount <= 100
+}
+guard g2 {
+    payload.amount <= 100
+}
+signal order {
+    states: [pending, paid]
+    initial: pending
+    on pay from pending -> paid
+}
+"#;
+    let (_stdout, stderr) = run_stc_check_ddl(ddl, "duplicate_guard");
+
+    assert!(
+        stderr.contains("duplicate-guard-condition"),
+        "expected a DuplicateGuardCondition warning on stderr, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("g1") && stderr.contains("g2"),
+        "expected both duplicate guards to be named, got:\n{stderr}"
+    );
+}
