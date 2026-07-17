@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.11 全收口 —— M28 ✅（c67429b）+ M29 ✅（1280a72）+ M30 ✅（b15bcfb）；138 测试绿，version 0.2.0。v0.11 完成。**
+当前阶段：**v0.11 全收口（M28–M30 ✅，138 测试绿，0.2.0）。空闲决策点后，经判断启动 v0.12 新方向：多语言绑定（C-ABI 优先）。M31 起由 agent 逐步实现。**
 
 最近完成的工作（M30）：
 
@@ -246,3 +246,57 @@ v0.11（M28 DDL + M29 snapshot_dot + M30 成熟度）全收口。项目现状：
 | G：示例/场景库 | 把 DDL 示例扩成"场景即测试"的回归库（订单审批 / 门控 / 任务调度 / 故障保护）。 |
 
 本次不自动推进；等待下一步指令。
+
+## v0.12 下一段：多语言绑定（C-ABI）+ DDL 高阶语义 + 场景库
+
+### 路线判断
+
+愿景起点"描述文件与业务逻辑分离"的下一公里生态是**让非 Rust 也能驱动引擎**。候选 D/E/F/G 中，**D 是唯一能把项目从"Rust 库"升格为"可被任何语言消费的运行时"的一步**。采用 **C-ABI 优先于 WASM**：纯 `extern "C"` + 头文件，保持零新增依赖（wasm-bindgen 重且需 JS 胶水，违背克制原则）。
+
+**节奏**：M31 C-ABI 共享库（engine FFI + 头文件 + 跨语言 demo）→ M32 DDL 高阶语义（reaction guard + enter/leave 事件）→ M33 示例/场景库。
+
+### M31：v0.12 C-ABI 共享库 —— 设计 + 实现（本轮起）
+
+**目标**：让 C / C++ / Python / Node（via FFI）都能加载 .JSON 拓扑、投递事件、读状态/trace。lib 本身零依赖暴露；跨语言 demo 用系统自带工具（python3 ctypes / gcc）验证。
+
+**实现位点**：
+- 新增 `src/ffi.rs`：`#[no_mangle] pub extern "C"` 函数：
+  - `engine_new(topology_json: *const c_char) -> *mut TopologyEngine`
+  - `engine_send_event(engine: *mut TopologyEngine, event_json: *const c_char) -> *mut c_char`（事件 JSON `{signal_id,event,payload}` → 结果 JSON；调用方用 `engine_free_str` 释放）
+  - `engine_get_state(engine: *mut TopologyEngine, signal_id: *const c_char) -> *mut c_char`
+  - `engine_get_traces(engine: *mut TopologyEngine) -> *mut c_char`
+  - `engine_free(engine: *mut TopologyEngine)` / `engine_free_str(s: *mut c_char)`
+  - 所有函数内部 `unsafe` 解指针；返回 JSON 用 `CString::into_raw` 泄漏。
+- 新增 `include/signal_topology.h`：手写 C 头文件（函数声明 + 使用说明 + 内存规则）。
+- `Cargo.toml`：`[lib]` 加 `crate-type = ["cdylib", "staticlib"]`（保留 rlib）。
+- `examples/ffi/`：
+  - `test.c`：加载 `.so`，跑 order_approval → 断言终态 shipped。
+  - `test.py`：python3 ctypes 加载 `.so`，跑同一场景。
+  - `run.sh`：一键编译 + 跑 C demo + 跑 Python demo。
+- 文档：`doc/ffi.md`（函数签名、内存所有权规则、跨语言 demo 步骤）。
+
+**测试**：
+- `tests/ffi_test.rs`：Rust 侧调 FFI（engine_new/send_event/get_state/free），跑 order_approval → 终态 shipped。
+- C demo 与 Python demo 实跑验证（写 `examples/ffi/run.sh`）。
+- 现有 138 测试零回归。
+
+**验收标准**：
+1. `cargo build` 生成 `.so`/`.a`（`target/debug/libsignal_topology.so` 存在）。
+2. `cargo test` 全绿（FFI 端到端 + 138 旧测试零回归）。
+3. `cargo clippy --all-targets` 零警告。
+4. `examples/ffi/test.c` 编译运行后断言终态 shipped（实跑验证）。
+5. `examples/ffi/test.py` 运行后断言终态 shipped（实跑验证）。
+6. `doc/ffi.md` 覆盖函数签名 + 内存所有权规则 + demo 步骤。
+
+### M32：DDL 高阶语义（reaction guard）
+
+- 引擎层：`ReactionDef` 新增 `guard: Option<String>`；`send_event_internal` 派发 reaction 前求值 guard。
+- DDL：`reaction { when <sig> enters <state> [when <guard>] -> <tgt_sig> <event> }` 的守卫不再报错，编译到 `ReactionDef.guard`。
+- 测试：reaction guard 通过/阻断；级联端到端。
+- 文档：`doc/ddl.md` + `doc/cascades.md` 补节。
+
+### M33：示例/场景库（回归 + 教学）
+
+- `examples/scenarios/`：订单审批 / 门控 / 任务调度 / 故障保护，每场景含 `.ddl` + `.scenario.json` + EXPECTED.md。
+- `tests/scenarios_test.rs`：自动遍历 `examples/scenarios/`，每场景跑一遍、断言终态与关键 trace 节点。
+- 文档：`doc/scenarios.md` 场景索引 + 业务说明。
