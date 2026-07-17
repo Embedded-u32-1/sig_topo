@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.14 全收口（M38 ✅ + M39 ✅ + M40 ✅，195 测试绿，version 0.4.0）。**
+当前阶段：**v0.14 全收口（M38–M40 ✅，195 测试绿，0.4.0）。空闲决策点后，经判断启动 v0.15 新方向：guard 可观测性与调试。M41 起由 agent 逐步实现。**
 
 最近完成的工作（M33）：
 
@@ -489,4 +489,64 @@ v0.14（M38 reaction guard 复合语义 + M39 guard demo + stc --check 增强 + 
 | L3：完整工作流引擎 | fork / join、sub-topology 组合；把当前线性级联升格为可表达并行分支与汇流的工作流。 |
 | L4：stc LSP | 基于 `check_ddl` + `guard_ref` 的补全/诊断 LSP：guard id 自动补全、未实时报错的 unused/duplicate guard。 |
 
-本次不自动推进；等待下一步指令。
+本次不自动推进；等待下一步指令（已采纳 L1+L2 优先 → v0.15，见下）。
+
+## v0.15 下一段：guard 可观测性与调试
+
+### 路线判断
+
+**判断**：M38 已让 guard 求值有 trace，M29 已有 snapshot_dot 运行时高亮，但两者还没连接——用户看到"某 reaction 被跳过"却不能直观看到"为什么被跳过"。在 L1/L2/L3/L4 候选中，**L1+L2 的组合（guard 可视化 + guard 调试器）是把 guard 系统从"可用"升格为"可调试"的最自然一步**，且都建立在已有基础上（guard trace + snapshot_dot + sts REPL）。
+
+**节奏**：M41 guard 调试器（sts `why` 命令 + guard trace 可视化）→ M42 snapshot_dot 增强（标出 guard-blocked reaction）→ M43 收口。
+
+### M41：v0.15 guard 调试器 —— 设计 + 实现（本轮起）
+
+**目标**：让用户在 sts REPL 内定位「为什么这条 reaction 没触发」。
+
+**具体改进**：
+
+**A. sts `why` 命令（`src/bin/sts.rs`）**
+- 新增 `why <from_signal> <from_state> <to_signal> <event>` 命令（或更简洁的 `why <reaction_index>`）。
+- 实现：从 engine trace 中过滤出匹配的 `ReactionGuardEvaluated` 事件，打印：反应 guard 表达式、求值结果（true/false/error）、当时的 payload 快照。
+- 解析：扩展 `Command` enum 加 `Why { from_signal, from_state, to_signal, event }`；`parse_command` 加 `why` 分支；dispatch 加 `cmd_why`。
+- 若无匹配 trace（ reaction 从未被评估），友好提示「该 reaction 尚未被评估过（可能 from_state 未到达）」。
+
+**B. guard trace 彩色/可视化输出（`src/run.rs` format_trace 或独立 helper）**
+- 在 `sts` 的 `trace` 命令输出中，`ReactionGuardEvaluated` 事件用颜色标记（true=绿 / false=黄 / err=红）—— 仅 tty 输出时启用（用 `atty` 检测或简单 `\x1b[...m` 转义，无需新依赖）。
+- 或在 `why` 命令内直接打印"求值上下文"：guard 表达式 + 当时的 payload JSON + 求值路径。
+
+**测试**：
+- `src/bin/sts.rs` 单元测试：parse_command("why ...") 路由正确。
+- `tests/sts_test.rs` 或新建 `tests/sts_why_test.rs`：端到端跑含 guard 的场景 → 调 `why` 命令 → 断言输出含 ReactionGuardEvaluated 关键信息（guard 表达式 + result）。
+- 现有 195 测试零回归。
+
+**验收标准**：
+1. sts `why` 命令能打印指定 reaction 的 guard 求值 trace（表达式 + 结果 + payload）。
+2. 195 测试零回归 + clippy 零警告。
+3. `doc/shell.md` 补 `why` 命令说明 + 示例转录。
+
+### M42：snapshot_dot 增强（标出 guard-blocked reaction）
+
+**目标**：在 DOT 图中可视化 reaction guard 阻断。
+
+**具体改进**：
+- `export/dot.rs` 加 `to_dot_with_guard_info(schema, states, guard_info)` 变体：接受每 reaction 的 guard 求值结果映射，在对应的 reaction 边（若显式绘制 reaction 边）或标注中标记结果。
+- 当前 `to_dot` 不绘制反应边（README 注明）；本里程碑可选：(a) 新增 mode 绘制 reaction 边（虚线、带 guard result 颜色）或 (b) 在现有 DOT 输出中加注释/label 标注 guard result。
+- 推荐 (a)：新增 `to_dot_extended(schema, states, reactions_info)` 显式绘制 reaction 边（颜色：true=实线绿 / false=虚线灰 / err=虚线红）。
+- 在 `TopologyEngine` 新增 `pub fn snapshot_dot_extended(&self) -> String`。
+- 在 `sts` 加 `dot-ext` 命令调用；或在 `snapshot_dot` 内自动叠加（若 trace 中存在 guard info）。
+
+**测试**：
+- `to_dot_extended` 单元测试：guard=true 边为实线绿、guard=false 边为虚线灰。
+- 端到端：跑含 guard 场景 → snapshot_dot_extended → 断言输出含颜色属性。
+
+**验收标准**：
+1. `snapshot_dot_extended` 绘制 reaction 边并按 guard 结果着色。
+2. 195 测试零回归 + clippy 零警告。
+
+### M43：收口
+
+- 全模块 doc-comments 复核（M41/M42 新增代码）。
+- version 0.4.0 → 0.5.0（guard 可观测性 + 调试是 guard 系统的闭环）。
+- README / roadmap / plan 同步（加 `why` 命令 + snapshot_dot_extended 段）。
+- `cargo test` + `cargo clippy` + `cargo doc` 全绿。
