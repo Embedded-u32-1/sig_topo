@@ -1,6 +1,6 @@
 use crate::error::EngineError;
 use crate::guard::eval_guard;
-use crate::schema::{ReactionDef, TopologySchema, TransitionDef};
+use crate::schema::{ReactionDef, SignalDef, TopologySchema, TransitionDef};
 use crate::trace::{now_ms, TraceEvent, TraceLog};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -36,6 +36,10 @@ pub struct TopologyEngine {
 pub(crate) struct SignalState {
     pub(crate) current: String,
     pub(crate) states: Vec<String>,
+    // Captured from the schema at construction so a runtime snapshot can
+    // recover the static initial-state highlight without re-holding the full
+    // schema. Populated in `from_schema` / `reload_topology`.
+    pub(crate) initial_state: String,
 }
 
 impl TopologyEngine {
@@ -60,6 +64,7 @@ impl TopologyEngine {
                 SignalState {
                     current: sig.initial_state.clone(),
                     states: sig.states.clone(),
+                    initial_state: sig.initial_state.clone(),
                 },
             );
         }
@@ -373,6 +378,47 @@ impl TopologyEngine {
         self.signals.keys().map(|s| s.as_str()).collect()
     }
 
+    /// Render the topology as Graphviz DOT with every signal's *current*
+    /// state highlighted (see `crate::export::to_dot_with_state`).
+    ///
+    /// Reconstructs a minimal `TopologySchema` from the engine's runtime
+    /// state — the engine does not hold the original schema, only the
+    /// flattened transitions/reactions and per-signal `SignalState` (which
+    /// carries `states` + `initial_state`). The current states are collected
+    /// into the `states` map the renderer expects, so the resulting diagram
+    /// shows lightgreen "live" nodes that follow the engine as it transitions.
+    pub fn snapshot_dot(&self) -> String {
+        let states: HashMap<String, String> = self
+            .signals
+            .iter()
+            .map(|(id, sig)| (id.clone(), sig.current.clone()))
+            .collect();
+
+        let signals: Vec<SignalDef> = self
+            .signals
+            .iter()
+            .map(|(id, sig)| SignalDef {
+                id: id.clone(),
+                initial_state: sig.initial_state.clone(),
+                states: sig.states.clone(),
+            })
+            .collect();
+
+        let schema = TopologySchema {
+            // The engine never stored the source version; the renderer does
+            // not use it, so a sentinel keeps the field honest.
+            version: "snapshot".to_string(),
+            signals,
+            transitions: self.transitions.clone(),
+            reactions: self.reactions.clone(),
+            components: None,
+            instances: Vec::new(),
+            includes: Vec::new(),
+        };
+
+        crate::export::to_dot_with_state(&schema, &states)
+    }
+
     pub fn reload_topology(&mut self, json_str: &str) -> Result<(), EngineError> {
         let schema: TopologySchema =
             serde_json::from_str(json_str).map_err(|e| EngineError::ReloadError(e.to_string()))?;
@@ -390,6 +436,7 @@ impl TopologyEngine {
                 SignalState {
                     current,
                     states: sig.states.clone(),
+                    initial_state: sig.initial_state.clone(),
                 },
             );
         }

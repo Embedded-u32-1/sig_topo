@@ -2,6 +2,28 @@ use crate::schema::{TopologySchema, TransitionDef};
 use std::collections::HashMap;
 
 pub fn to_dot(schema: &TopologySchema) -> String {
+    // The structural skeleton with no runtime state: delegate to the
+    // state-aware renderer with an empty map so every signal falls back to
+    // the static initial-state highlight. Keeps a single rendering path and
+    // full backward compatibility for `to_dot`'s signature and output.
+    to_dot_with_state(schema, &HashMap::new())
+}
+
+/// Render `schema` as Graphviz DOT, additionally highlighting each signal's
+/// *current* state from `states` (signal id -> current state).
+///
+/// Visual strategy, per state node (first match wins):
+/// - current state (`states.get(signal.id) == Some(state)`) ->
+///   `style=filled fillcolor=lightgreen penwidth=2`. The runtime highlight
+///   always wins, so a node the signal is sitting on reads as "live".
+/// - otherwise, the initial state -> `style=filled fillcolor=lightblue`,
+///   the static "started here" marker.
+/// - everything else -> no extra attributes.
+///
+/// When current != initial you see both cues (lightblue = started here,
+/// lightgreen = is here now); when they coincide, lightgreen wins. Callers
+/// passing an empty `states` map get the same output as `to_dot`.
+pub fn to_dot_with_state(schema: &TopologySchema, states: &HashMap<String, String>) -> String {
     // Cross-signal reactions (cascades) are intentionally omitted from DOT
     // output to keep diagrams readable; only explicit transitions are drawn.
     let mut out = String::new();
@@ -26,10 +48,17 @@ pub fn to_dot(schema: &TopologySchema) -> String {
 
         for state in &signal.states {
             let node_id = node_id(&signal.id, state);
-            let attrs = if *state == signal.initial_state {
-                "style=filled fillcolor=lightblue"
-            } else {
-                ""
+            // Runtime highlight takes precedence over the static initial-state
+            // marker: "where the signal is now" outranks "where it started".
+            let attrs = match states.get(&signal.id) {
+                current if current == Some(state) => "style=filled fillcolor=lightgreen penwidth=2",
+                _ => {
+                    if *state == signal.initial_state {
+                        "style=filled fillcolor=lightblue"
+                    } else {
+                        ""
+                    }
+                }
             };
             out.push_str(&format!(
                 "    {} [label=\"{}\"{}];\n",

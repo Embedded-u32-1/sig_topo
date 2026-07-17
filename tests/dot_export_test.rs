@@ -1,5 +1,6 @@
-use signal_topology::export::to_dot;
+use signal_topology::export::{to_dot, to_dot_with_state};
 use signal_topology::schema::TopologySchema;
+use std::collections::HashMap;
 use std::fs;
 
 fn load_schema() -> TopologySchema {
@@ -135,6 +136,69 @@ fn test_dot_transition_with_no_actions_has_event_only_label() {
     let dot = to_dot(&schema);
 
     assert!(dot.contains("label=\"go\""));
+}
+
+#[test]
+fn test_dot_with_state_highlights_current_state() {
+    let schema = load_schema();
+
+    // Mark task_status as currently 'running' (which is NOT the initial state).
+    let mut states = HashMap::new();
+    states.insert("task_status".to_string(), "running".to_string());
+    let dot = to_dot_with_state(&schema, &states);
+
+    // Current state gets the runtime highlight (lightgreen + penwidth).
+    assert!(dot.contains(
+        "n_task_status_running [label=\"running\" style=filled fillcolor=lightgreen penwidth=2]"
+    ));
+    // Initial state, since it differs from current, keeps the static lightblue.
+    assert!(dot
+        .contains("n_task_status_idle [label=\"idle\" style=filled fillcolor=lightblue]"));
+    // A state that is neither current nor initial has no highlight.
+    assert!(dot.contains("n_task_status_success [label=\"success\"]"));
+    // No stale lightgreen should leak onto non-current nodes.
+    assert!(!dot.contains("n_task_status_success [label=\"success\" style="));
+}
+
+#[test]
+fn test_dot_with_state_current_equals_initial_wins_runtime_highlight() {
+    let schema = load_schema();
+
+    // When the current state IS the initial state, the runtime highlight wins
+    // (lightgreen), so the two cues don't stack on one node.
+    let mut states = HashMap::new();
+    states.insert("task_status".to_string(), "idle".to_string());
+    let dot = to_dot_with_state(&schema, &states);
+
+    assert!(dot.contains(
+        "n_task_status_idle [label=\"idle\" style=filled fillcolor=lightgreen penwidth=2]"
+    ));
+    // The static lightblue marker must be absent: runtime outranks initial.
+    assert!(!dot.contains("lightblue"));
+}
+
+#[test]
+fn test_dot_with_state_unknown_signal_id_is_ignored() {
+    let schema = load_schema();
+
+    // A state entry for a signal that does not exist must not crash and must
+    // not highlight anything; only the static initial-state marker shows.
+    let mut states = HashMap::new();
+    states.insert("does_not_exist".to_string(), "whatever".to_string());
+    let dot = to_dot_with_state(&schema, &states);
+
+    assert!(dot.contains("lightblue"));
+    assert!(!dot.contains("lightgreen"));
+}
+
+#[test]
+fn test_dot_with_state_empty_map_matches_plain_to_dot() {
+    let schema = load_schema();
+
+    // An empty states map must reproduce the skeleton render exactly.
+    let plain = to_dot(&schema);
+    let with_state = to_dot_with_state(&schema, &HashMap::new());
+    assert_eq!(plain, with_state);
 }
 
 #[test]

@@ -52,6 +52,7 @@ fn main() {
             Ok(Command::Quit) => break,
             Ok(Command::Fail { action_id }) => session.fail(&action_id),
             Ok(Command::Reset) => session.reset(),
+            Ok(Command::Dot) => cmd_dot(&session),
             Ok(Command::Unknown(_)) => println!("Unknown command. Type 'help'."),
             Err(ParseError::MissingEventArgs) => {
                 println!("Usage: event <signal> <event> [json payload]");
@@ -123,6 +124,7 @@ enum Command {
         action_id: String,
     },
     Reset,
+    Dot,
     Unknown(String),
 }
 
@@ -173,6 +175,7 @@ fn parse_command(line: &str) -> Result<Command, ParseError> {
             None => Err(ParseError::MissingFailActionId),
         },
         Some("reset") => Ok(Command::Reset),
+        Some("dot") => Ok(Command::Dot),
         Some(other) => Ok(Command::Unknown(other.to_string())),
     }
 }
@@ -235,12 +238,21 @@ fn cmd_trace(session: &StsSession) {
     }
 }
 
+/// `dot` — print the topology as Graphviz DOT with every signal's *current*
+/// state highlighted lightgreen. Paste the output into Graphviz (or `dot`
+/// directly) to render it. The highlight follows the engine: send an event
+/// and run `dot` again to see the live node move.
+fn cmd_dot(session: &StsSession) {
+    print!("{}", session.engine.snapshot_dot());
+}
+
 /// `help` — describe the available commands.
 fn cmd_help() {
     println!("Commands:");
     println!("  event <signal> <event> [json payload]  send an event to a signal");
     println!("  state                                   list all signal states");
     println!("  trace                                   print the trace log");
+    println!("  dot                                     print runtime-highlighted DOT");
     println!("  fail <action_id>                        force that action to fail");
     println!("  reset                                   clear forced-failure set");
     println!("  help                                    show this help");

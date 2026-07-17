@@ -20,6 +20,7 @@ pub use compose::{expand, from_path, load_topology};
 pub use engine::{ActionContext, TopologyEngine, TransitionResult};
 pub use error::EngineError;
 pub use export::to_dot;
+pub use export::to_dot_with_state;
 pub use guard::{eval_guard, Value};
 pub use persist::StateSnapshot;
 pub use trace::{TraceEvent, TraceLog};
