@@ -22,6 +22,20 @@ pub struct Token {
 /// the first lexical error (unexpected char, unterminated string).
 pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
     let chars: Vec<char> = src.chars().collect();
+    // Map each char index to its byte offset in `src`, so a Token's `start`
+    // and `len` are byte-based and can safely slice `&str` (multi-byte chars
+    // make char indices differ from byte offsets — `parse_guard` relies on
+    // this being correct).
+    let byte_pos: Vec<usize> = {
+        let mut v = Vec::with_capacity(chars.len() + 1);
+        let mut b = 0;
+        for c in &chars {
+            v.push(b);
+            b += c.len_utf8();
+        }
+        v.push(b);
+        v
+    };
     let mut i = 0;
     let mut line: usize = 1;
     let mut col: usize = 1;
@@ -53,7 +67,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
             continue;
         }
 
-        let start = i;
+        let start = byte_pos[i]; // byte offset, see `byte_pos` above
         let start_line = line;
         let start_col = col;
 
@@ -86,7 +100,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
                 line: start_line,
                 col: start_col,
                 start,
-                len: i - start,
+                len: byte_pos[i] - start,
             });
             continue;
         }
@@ -135,7 +149,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
                 line: start_line,
                 col: start_col,
                 start,
-                len: i - start,
+                len: byte_pos[i] - start,
             });
             continue;
         }
@@ -173,7 +187,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
                 line: start_line,
                 col: start_col,
                 start,
-                len: i - start,
+                len: byte_pos[i] - start,
             });
             continue;
         }
@@ -258,7 +272,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
             line: start_line,
             col: start_col,
             start,
-            len: i - start,
+            len: byte_pos[i] - start,
         });
     }
 

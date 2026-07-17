@@ -230,6 +230,7 @@ fn expand_reaction(
         to_signal: resolve(&reaction.to_signal, name, component, bound)?,
         event: resolve(&reaction.event, name, component, bound)?,
         payload: reaction.payload.clone(),
+        guard: reaction.guard.clone(),
     })
 }
 

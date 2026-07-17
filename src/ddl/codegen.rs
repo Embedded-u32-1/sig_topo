@@ -12,22 +12,10 @@ use super::parser::{DdlDoc, TransDecl};
 
 /// Emit a `TopologySchema` from a parsed DDL document.
 ///
-/// Reaction guards are rejected here: the engine's `ReactionDef` carries no
-/// guard field and cascade matching does not evaluate one, so a reaction guard
-/// cannot be enforced. Rather than silently dropping it (a footgun — the user
-/// wrote it expecting it to mean something), we surface a clear error pointing
-/// the user at transition guards / payload conditions instead.
+/// Reaction guards pass through verbatim into `ReactionDef.guard`; the engine
+/// evaluates them at cascade time and skips any reaction whose guard is false
+/// (see `engine::send_event_internal`, M32).
 pub fn emit(doc: DdlDoc) -> Result<TopologySchema, EngineError> {
-    for r in &doc.reactions {
-        if r.guard.is_some() {
-            return Err(EngineError::ParseError(
-                "reaction guards are not supported by the engine; guard a \
-                 transition instead, or gate the source event"
-                    .to_string(),
-            ));
-        }
-    }
-
     let mut signals = Vec::with_capacity(doc.signals.len());
     let mut transitions = Vec::new();
 
@@ -78,6 +66,7 @@ fn emit_reaction(r: super::parser::ReactionDecl) -> ReactionDef {
         to_signal: r.to_signal,
         event: r.event,
         payload: None,
+        guard: r.guard,
     }
 }
 
@@ -177,8 +166,10 @@ mod tests {
     }
 
     #[test]
-    fn codegen_reaction_guard_is_rejected() {
-        let err = emit(DdlDoc {
+    fn codegen_reaction_guard_passes_through() {
+        // M32: reaction guards are now supported by the engine and pass
+        // through verbatim into `ReactionDef.guard`.
+        let schema = emit(DdlDoc {
             signals: vec![],
             reactions: vec![crate::ddl::parser::ReactionDecl {
                 from_signal: "order".to_string(),
@@ -188,13 +179,9 @@ mod tests {
                 guard: Some("payload.auto".to_string()),
             }],
         })
-        .unwrap_err();
+        .unwrap();
 
-        let msg = err.to_string();
-        assert!(
-            msg.contains("reaction guards are not supported"),
-            "got: {}",
-            msg
-        );
+        assert_eq!(schema.reactions.len(), 1);
+        assert_eq!(schema.reactions[0].guard, Some("payload.auto".to_string()));
     }
 }

@@ -63,6 +63,7 @@ fn notify_component() -> ComponentDef {
             to_signal: "${kind}".to_string(),
             event: "complete".to_string(),
             payload: None,
+            guard: None,
         }],
     }
 }

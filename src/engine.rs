@@ -252,7 +252,10 @@ impl TopologyEngine {
         event: &str,
         payload: Option<Value>,
     ) -> Result<TransitionResult, EngineError> {
-        self.send_event_internal(signal_id, event, payload, 0)
+        // The top-level event is its own "parent" — a reaction reacting to this
+        // transition evaluates its guard against this same payload (see
+        // send_event_internal).
+        self.send_event_internal(signal_id, event, payload.clone(), payload, 0)
     }
 
     fn send_event_internal(
@@ -260,6 +263,12 @@ impl TopologyEngine {
         signal_id: &str,
         event: &str,
         payload: Option<Value>,
+        // The payload of the event that caused *this* transition. A reaction
+        // reacting to this transition evaluates its guard against
+        // `parent_payload` (the source event's payload), not the reaction's
+        // static payload — mirroring how a transition guard reads its own
+        // event's payload (M32).
+        parent_payload: Option<Value>,
         depth: usize,
     ) -> Result<TransitionResult, EngineError> {
         if depth > self.max_cascade_depth {
@@ -413,9 +422,41 @@ impl TopologyEngine {
             .collect();
 
         for reaction in matching_reactions {
+            // A reaction guard gates the cascade. It is evaluated against the
+            // *source* event's payload (`parent_payload`) — the payload of the
+            // event that triggered the transition this reaction reacts to — so
+            // a reaction can be gated on the data that caused it. This mirrors
+            // how a transition guard reads its own event's payload. A guard
+            // that is false, or that fails to evaluate, skips *this* reaction
+            // only — it never rolls back the already-committed transition and
+            // never aborts the remaining reactions. This keeps a single bad
+            // guard from breaking the whole cascade chain (see M32).
+            if let Some(guard_str) = &reaction.guard {
+                let guard_ctx = ActionContext {
+                    signal_id: reaction.to_signal.clone(),
+                    from_state: reaction.from_state.clone(),
+                    to_state: self
+                        .signals
+                        .get(&reaction.to_signal)
+                        .map(|s| s.current.clone())
+                        .unwrap_or_default(),
+                    event: reaction.event.clone(),
+                    payload: parent_payload.clone(),
+                };
+                match eval_guard(guard_str, &guard_ctx) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(_) => continue,
+                }
+            }
+
+            // The reaction's static payload becomes the derived event's payload
+            // (`payload`), and — being the event that drives the next level —
+            // also the `parent_payload` any deeper reaction reacts against.
             self.send_event_internal(
                 &reaction.to_signal,
                 &reaction.event,
+                reaction.payload.clone(),
                 reaction.payload.clone(),
                 depth + 1,
             )?;

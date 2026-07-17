@@ -138,11 +138,10 @@ reaction {
 }
 
 #[test]
-fn reaction_guard_is_rejected_at_compile_time() {
-    // The engine's `ReactionDef` carries no guard field and cascade matching
-    // does not evaluate one, so a reaction guard cannot be enforced. The
-    // compiler rejects it (rather than silently dropping it) and points the
-    // user at transition guards instead.
+fn reaction_guard_passes_through_to_schema() {
+    // M32: a reaction guard is no longer rejected. The DDL compiler passes it
+    // through verbatim into `ReactionDef.guard`, and the engine evaluates it
+    // at cascade time (see tests/reaction_guard_test.rs).
     let src = r#"
 signal order {
     states: [submitted, approved]
@@ -163,12 +162,61 @@ reaction {
 }
 "#;
 
-    let err = signal_topology::ddl::compile(src).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("reaction guards are not supported"),
-        "expected a clear unsupported-guard error, got: {}",
-        msg
+    let schema = signal_topology::ddl::compile(src).expect("reaction guard must now compile");
+    assert_eq!(schema.reactions.len(), 1);
+    assert_eq!(
+        schema.reactions[0].guard,
+        Some("payload.auto".to_string()),
+        "the guard must reach ReactionDef.guard verbatim"
+    );
+}
+
+#[test]
+fn reaction_guard_end_to_end_via_ddl() {
+    // End-to-end via the DDL fixture: a reaction carries a guard that
+    // evaluates to true with the payload the reaction delivers. This proves
+    // the full path — DDL source → `ReactionDef.guard` → engine guard eval →
+    // cascade fires — and that the main transition commits either way.
+    //
+    // Note: DDL does not yet emit reaction *payloads* (deferred in M28), so
+    // this fixture's guard is written to be true without reading `payload.*`.
+    // Payload-based gating through DDL will follow once reaction payload
+    // templates land; the payload case is covered in
+    // tests/reaction_guard_test.rs via JSON (which can set reaction payload).
+    let ddl = std::fs::read_to_string("tests/fixtures/reaction_guard.ddl")
+        .expect("reaction_guard.ddl fixture should exist");
+    let mut engine = engine_from_ddl(&ddl);
+
+    engine
+        .send_event("order", "approve", None)
+        .expect("main transition commits");
+
+    assert_eq!(engine.get_state("order").unwrap(), "approved");
+    assert_eq!(
+        engine.get_state("inventory").unwrap(),
+        "allocating",
+        "guard=true must let the cascade fire"
+    );
+}
+
+#[test]
+fn reaction_guard_end_to_end_ddl_blocks_when_false() {
+    // The same DDL fixture, but its reaction guard flipped to a constant
+    // `false`. The cascade must be skipped, while the main transition still
+    // commits — the headline M32 contract.
+    let ddl = std::fs::read_to_string("tests/fixtures/reaction_guard_block.ddl")
+        .expect("reaction_guard_block.ddl fixture should exist");
+    let mut engine = engine_from_ddl(&ddl);
+
+    engine
+        .send_event("order", "approve", None)
+        .expect("main transition commits");
+
+    assert_eq!(engine.get_state("order").unwrap(), "approved");
+    assert_eq!(
+        engine.get_state("inventory").unwrap(),
+        "idle",
+        "guard=false must skip the cascade"
     );
 }
 

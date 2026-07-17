@@ -131,4 +131,12 @@ pub struct ReactionDef {
     pub event: String,
     /// The static payload for the derived event, if any.
     pub payload: Option<serde_json::Value>,
+    /// An optional guard expression; the reaction is skipped when it evaluates
+    /// to `false`. Defaults to `None` (unconditional cascade).
+    ///
+    /// The guard is evaluated against the reaction's static `payload` (see
+    /// `engine::send_event_internal`), so a reaction guard can gate the cascade
+    /// on the payload carried by the derived event.
+    #[serde(default)]
+    pub guard: Option<String>,
 }

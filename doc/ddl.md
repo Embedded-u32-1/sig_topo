@@ -121,6 +121,7 @@ unchanged.
 | lifecycle hook `on_transition: x`           | `transitions[].actions.on_transition[]`                    |
 | lifecycle hook `on_enter: x`                | `transitions[].actions.on_enter[]`                         |
 | `reaction { when S enters ST -> T EV }`    | `reactions[]`: `from_signal`, `from_state`, `to_signal`, `event` |
+| `reaction { ... when G }` (reaction guard)  | `reactions[].guard` (string, verbatim; evaluated at cascade) |
 | (implicit)                                  | `version` = `"0.1"`                                        |
 
 Mapping rules:
@@ -143,21 +144,31 @@ matching reactions after the main transition commits; see `doc/cascades.md` and
 `doc/transaction.md` for the cascade / rollback semantics (per-signal atomic,
 already-committed ancestors retained on a later failure).
 
-### Reaction guard — not supported
+### Reaction guard (M32)
 
-**A `reaction { ... when <guard> }` guard is rejected at compile time.** The
-engine's `ReactionDef` carries no guard field and cascade matching does not
-evaluate one, so a reaction guard could not be enforced. Rather than silently
-dropping it (which would mislead the user about the resulting behaviour), `stc`
-exits with:
+A `reaction` may carry a `when <guard>` clause. At cascade time the engine
+evaluates the guard against the **source event's payload** — the payload of
+the `send_event` call that triggered the transition the reaction reacts to —
+exactly as a transition guard reads its own event's payload. The reaction's
+static `payload` (the derived event's payload delivered to the target) is a
+separate value and is *not* what the guard reads.
 
+Semantics:
+
+- guard evaluates to `true` (or is absent) → the cascade fires.
+- guard evaluates to `false` → that reaction is skipped. The main transition
+  has already committed, and the remaining reactions are untouched.
+- guard fails to evaluate (e.g. a syntax error) → that reaction is skipped,
+  not an error. A single bad guard never breaks the whole cascade chain.
+
+```ddl
+reaction {
+    when order enters approved -> inventory allocate when payload.auto == true
+}
 ```
-Parse error: reaction guards are not supported by the engine; guard a
-transition instead, or gate the source event
-```
 
-To gate a cascade, put a `when` guard on a **transition** of the source or
-target signal, or shape the source event's payload.
+Mapping: the guard lands verbatim in `reactions[].guard` and is evaluated by
+`engine::send_event_internal`.
 
 ## Tool chain
 
@@ -181,7 +192,6 @@ order_approval.ddl ──stc──▶ order_approval.json ──▶ engine (sts/
 | `... duplicate signal 'S'`                                              | Two `signal S` blocks.                         |
 | `... duplicate 'on_exit' hook`                                          | Same lifecycle phase declared twice in a block.|
 | `line L col C: 'when' requires a guard expression`                      | Empty `when` with no expression.               |
-| `reaction guards are not supported by the engine ...`                   | Used `when <guard>` on a `reaction`.           |
 | `Failed to compile '...': line L col C: unterminated string literal`    | A `'...'` string wasn't closed.                |
 
 All error messages carry `line`/`col` pointing at the offending token. The
