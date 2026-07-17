@@ -13,13 +13,41 @@
 - **v0.7 模块化导入**（M16 ✅、M17 ✅、M18 ✅）：`ComponentDef`/`InstanceDef`、`expand()` 参数化组件展开、`load_topology` 跨文件导入（循环检测 + 合并并集）、三 CLI 统一接入、示例库、`doc/composition.md`、`README.md`、`src/compose.rs`。验收通过（71 测试绿，house.json 端到端级联跑通）。
 - **M16 review 的 2 个 Major 已修复**（commit 965684c）：M1 subst 改为从左到右单次扫描（确定性 + 不二次解释）；M2 MissingBinding 透传真实组件名；附 3 个回归测试。
 
-原始 MVP 排除清单中，守卫、级联、持久化、模块化导入均已完成；**事务回滚**：v0.8 M19 ✅（延迟状态提交 + 回滚）、M20 ✅（transaction_test + doc/transaction.md）；**交互式模拟**：v0.9 M21 ✅（sts REPL，commit 3392cc8）、M22 ✅（示例场景 + doc/shell.md，commit f79acdd）；**级联事务扩展**：v0.10 M23 ✅（级联失败语义 + 测试 + doc/transaction.md，commit eb3e910）。**正在进行**：无。下一步：v0.11 M24 WASM 多语言绑定（低优先级，依赖团队跨平台需求再排期）。路线图从这里继续。
+原始 MVP 排除清单中，守卫、级联、持久化、模块化导入均已完成；**事务回滚**：v0.8 M19 ✅（延迟状态提交 + 回滚）、M20 ✅（transaction_test + doc/transaction.md）；**交互式模拟**：v0.9 M21 ✅（sts REPL，commit 3392cc8）、M22 ✅（示例场景 + doc/shell.md，commit f79acdd）；**级联事务扩展**：v0.10 M23 ✅（级联失败语义 + 测试 + doc/transaction.md，commit eb3e910）；**sts 圆整 / stt 失败注入 / run:: 统一**：自定 M25 ✅ M26 ✅ M27 ✅（REPL 现场回滚 + 命令可测化 + stt 失败注入 + 共享 helpers）。**下一步**：v0.11 **领域描述语言**（M28 DDL 编译器 → M29 运行时 DOT 高亮 → M30 项目成熟度收尾）。M24 WASM 多语言绑定因低优先级暂不排。路线图从这里继续。
 
 ## 下阶段目标
 
+### 下阶段目标：领域描述语言（v0.11，M28–M30）
+
+愿景起点的核心洞察是「描述文件与业务逻辑分离」。v0.1–v0.10 跑通了底层引擎，但”描述文件”仍是面向实现的 JSON。本阶段让”描述”升级为面向领域的小语言（DDL），并补完路线图遗留的运行时 DOT 高亮、项目成熟度收尾。
+
+#### 里程碑 M28：DDL 编译器 + `stc` CLI
+
+- `signal <id> { states: [...] initial: ... on <event> from <src> -> <tgt> [when <guard>] { ... } }` 语法。
+- `reaction { when <sig> enters <state> -> <tgt_sig> <event> [when <guard>] }` 级联。
+- 新增 `src/ddl/{lexer,parser,codegen,mod}.rs` + `compile(src) -> Result<TopologySchema, EngineError>`。
+- 新增 `src/bin/stc.rs`：`stc <in.ddl> [out.json]`。
+- 示例 `examples/order_approval.ddl` + `doc/ddl.md`（语法→JSON 映射表）。
+- 测试：lexer/parser/codegen 单测 + `ddl_test.rs` 集成（.ddl → engine 端到端对拍 JSON）。
+- 验收：编译产物语义等价于同场景 JSON；错误带行列号；现有 100 测试零回归。
+
+#### 里程碑 M29：运行时 DOT 高亮（路线图 M2 未做项）
+
+- `export/dot.rs` 新增 `to_dot_with_state(schema, states)`。
+- `TopologyEngine::snapshot_dot(&self) -> String`。
+- `stv --live <topology> <state.json>` 叠加状态 / 或 `sts` 内 `dot` 命令。
+- 测试 + `doc/visualization.md` 补节。
+
+#### 里程碑 M30：项目成熟度收尾
+
+- pub API 加 `///` 文档注释 + 示例。
+- `Cargo.toml` `0.1.0` → `0.2.0`。
+- README 补 DDL 段 + 五 CLI 表。
+- `cargo doc` 无 warning / `cargo test` 全绿 / `cargo clippy` 零警告。
+
 ### 1. 拓扑图可视化查看（MVP+）
 
-让用户无需阅读 JSON 即可直观看到信号、状态与转移关系。仅做“查看”，不参与运行时逻辑。
+让用户无需阅读 JSON 即可直观看到信号、状态与转移关系。仅做”查看”，不参与运行时逻辑。
 
 方案：将 TopologySchema 导出为 Graphviz DOT 格式。理由：
 

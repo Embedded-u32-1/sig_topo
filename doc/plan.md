@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.9（M21 3392cc8 + M22 f79acdd）、v0.10 M23（eb3e910）、自定 M25（b6aac90）、自定 M26（ed16f15）、自定 M27（2efeff2）均收口；四 CLI bin（sts/stt/stp 走 run::，stv 直用 schema-only 加载合理不动）统一，README 过时数字与 run 文档补齐。进入空闲决策点。**
+当前阶段：**v0.9–v0.10（M21–M23）、自定 M25–M27 均收口；四 CLI bin 统一于 run::；100 测试绿。进入空闲决策点后，经判断启动 v0.11 新方向：领域描述语言（DDL）。M28 起由 agent 逐步实现。**
 
 最近完成的工作（M21）：
 
@@ -16,13 +16,27 @@
 
 ## 路线判断
 
-按路线图（`doc/roadmap.md`）v0.9 → v0.10 → v0.11 的顺序：
+### 已完成段（v0.1–v0.10 + M25–M27）
 
-1. **先把 M21 收口（最高 ROI）** —— 代码本体已成型，只是半成品。闭环一个可感知的交互式产品，比跳去新里程碑成本低。
-2. **紧接着 M22** —— 示例场景（订单审批、门控流程）配 `sts` 逐步演示 + `doc/shell.md`。它直接依赖 `sts`，顺水推舟。
-3. 其后按路线图推进：v0.10 M23（级联失败语义文档化+测试）→ v0.11 M24（WASM 多语言绑定，低优先级、依赖团队跨平台需求再排期）。
+按路线图（`doc/roadmap.md`）v0.9 → v0.10 → v0.11 的顺序推进：M21 收口 → M22 示例场景 → M23 级联失败语义 → M25–M27 自定圆整。全部完成。
 
-选择"M21 收口 → M22"作为当前踏出的两步，而非直接跳到 v0.10。
+### 下一段（v0.11 起）：领域描述语言
+
+**判断**：愿景起点文档的核心洞察是「描述文件与业务逻辑分离」。v0.1–v0.10 把"底层引擎"跑通，但"描述文件"仍是面向实现的 JSON（直接暴露 from/event/to/动作 id 等引擎原语），不是面向领域的。**兑现愿景的最后一层，是让"描述"本身升级成领域语言**——用户用业务语义写，编译到 JSON/引擎。
+
+**三条候选**：
+
+| 方向 | 是什么 | 价值 | 代价 |
+|------|--------|------|------|
+| **A：领域描述语言（DDL）** | 新增受控语法，用业务语义（states / on / go / when / then）描述，编译到 TopologySchema | 兑现愿景最后一层——描述真正可读、可写、面向领域 | 中：设计小语言 + 编译器 + 示例 |
+| B：运行时可观测性增强 | DOT 运行时状态高亮（M2 未做）、JSON trace 导出、`snapshot_dot()` | 调试更直观 | 小-中 |
+| C：项目成熟度 | public API 加文档注释 + 示例；版本 bump；发布准备 | 收拾体面 | 小 |
+
+**采纳 A 优先**，并把 B 的著名未做项（snapshot_dot）打包进去，C 作为收尾短期 milestone。
+
+**理由**：A 是唯一能让项目从"底层引擎"质变为"可用工具"的一步。愿景起点文档开场白就是"描述语言怎么设计？"——用 JSON 跑通整条链后回过头回答这个问题，是闭环。Snapshot_dot 是 DDL 的天然护航。C 是收尾体力活。
+
+**节奏**：M28 设计+实现 DDL 编译器（含集成测试 + 示例 + doc）→ M29 snapshot_dot 运行时高亮 → M30 项目成熟度收尾（doc-comments + version bump）。
 
 ## 里程碑
 
@@ -113,6 +127,86 @@
 
 1. stp 的 fail_actions 是新增额外能力，但 stp 回放后不打印 trace（只 save_state）；要看注入失败的具体 action/rollback 行需额外调 format_trace——当前未做。
 2. 健康扫描候选 B（补 engine/schema/error 单元测试 + 错误路径 fixture）与候选 C（版本 bump 0.1.0 → 0.2.0 / 发布准备）仍未做，可作为下轮方向。
+
+### M28：v0.11 领域描述语言（DDL）编译器 —— 设计 + 实现（本轮起）
+
+**目标**：让"描述文件"从面向实现的 JSON 升级为面向领域的小语言；用户用业务语义写 `.ddl`，编译到 `TopologySchema`，喂给既有引擎/工具链。引擎零改动。
+
+**语言设计（初版）**——面向业务语义、受控、左到右单次扫描：
+
+```ddl
+// 单信号
+signal order {
+    states: [draft, submitted, approved, rejected, shipped]
+    initial: draft
+
+    on submit from draft -> submitted {
+        on_exit: log_draft_exit
+        on_transition: validate_order_payload
+        on_enter: notify_submitted
+    }
+
+    on approve from submitted -> approved
+        when payload.amount > 0 and payload.amount <= 100000 {
+        on_transition: reserve_inventory
+        on_enter: notify_customer_approved
+    }
+}
+
+// 跨信号级联（reaction）
+reaction {
+    when order enters approved -> order_fulfill begin {}
+}
+```
+
+关键语法点：
+- `signal <id> { ... }`：声明信号 + 状态集 + 初始态。
+- `on <event> from <src> -> <tgt> [when <guard>] { <lifecycle> }`：一条转换（守卫可选）。
+- `reaction { when <sig> enters <state> -> <tgt_sig> <event> [when <guard>] }`：跨信号派生事件（映射到 ReactionDef）。
+- 注释 `//` 到行尾。
+- 守卫表达式复用既有 guard 语法（`payload.x > 0 and ...`）。
+
+**实现位点**：
+- 新增 `src/ddl/` 模块（`lexer.rs` / `parser.rs` / `codegen.rs` / `mod.rs`）：
+  - `lexer.rs`：词法（IDENT / 关键字 / `[` `]` `{` `}` `->` `:` `,` / 字符串 / 数字 / 注释）。
+  - `parser.rs`：递归下降 → `DdlDoc` AST（`SignalDecl` / `TransDecl` / `ReactionDecl`）。
+  - `codegen.rs`：`DdlDoc -> TopologySchema`（复用既有 `schema.rs` 类型）。
+  - `mod.rs`：`pub fn compile(src: &str) -> Result<TopologySchema, EngineError>`。
+- 新增 `src/bin/stc.rs`（signal-topology-compiler CLI）：`stc <input.ddl> [output.json]`，读 ddl → 写扁平 JSON。
+- `Cargo.toml` 注册 `stc` bin。
+- 示例：`examples/order_approval.ddl`（与已有 `order_approval.json` 同语义，对照验证）。
+- 文档：`doc/ddl.md`（语法参考 + 编译到 JSON 的映射表 + 示例）。
+
+**测试**：
+- `src/ddl/` 内单元测试：lexer 关键字/边界注释；parser 合法/非法（缺 `->`、未知关键字、重复信号）；codegen 映射正确（on_exit/on_transition/on_enter 顺序、guard 透传）。
+- `tests/ddl_test.rs` 集成测试：`order_approval.ddl` 编译后喂 `TopologyEngine`，跑 `submit/approve/ship` 终态 `shipped`（与既有 fixture 对拍）；guard 阻断；reaction 级联端到端。
+- 现有 100 测试不回归。
+
+**验收标准**：
+1. `cargo run --bin stc -- examples/order_approval.ddl /tmp/oa.json` 生成等价于 `order_approval.json` 的 JSON（语义对拍：同事件序列同终态）。
+2. 编译产物喂 `TopologyEngine` 端到端跑通既有场景。
+3. 语法错误给出带行列号的可定位错误（不 panic）。
+4. 现有 100 测试零回归。
+5. `doc/ddl.md` 覆盖全部语法。
+
+### M29：运行时状态高亮 DOT（snapshot_dot，路线图 M2 未做项）
+
+**目标**：`stv` 当前只能画拓扑骨架；补一个"当前各信号处在哪"的运行时视图。
+
+- `export/dot.rs` 新增 `to_dot_with_state(schema, &HashMap<String,String>) -> String`：当前状态节点高亮（如填充绿色/加粗边框）。
+- `TopologyEngine` 新增 `pub fn snapshot_dot(&self) -> String`（复用 `to_dot_with_state`）。
+- `stv` 新增用法：`stv --live <topology> <state.json>` 叠加状态；或 `sts` 内命令 `dot` 直接打印。
+- 测试：`to_dot_with_state` 初始态 vs 非初始态节点属性不同；`engine.snapshot_dot()` 包含当前态高亮。
+- 文档：`doc/visualization.md` 补"运行时高亮"节。
+
+### M30：项目成熟度收尾（doc-comments + version bump）
+
+**目标**：把 already-complete 的工程收拾体面。
+
+- `lib.rs` 及各 pub 模块加 `///` 文档注释 + 示例（cargo doc 可读）。
+- `Cargo.toml` version `0.1.0` → `0.2.0`（语义：从 MVP 到完整引擎 + DDL）。
+- `README.md` 补"领域描述语言"段 + 五 CLI 表（stv/stt/stp/sts/stc）。
+- `cargo doc` 无 warning；`cargo test` 全绿；`cargo clippy --all-targets` 零警告。
 
 ### M24：v0.11 WASM 多语言绑定（低优先级，依赖团队跨平台需求再排期，暂不排）
 
