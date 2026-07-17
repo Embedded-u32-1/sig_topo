@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.9（M21 3392cc8 + M22 f79acdd）与 v0.10 M23（eb3e910）均收口，示例转录已升格为测试，进入空闲决策点**。
+当前阶段：**v0.9（M21 3392cc8 + M22 f79acdd）、v0.10 M23（eb3e910）、自定 M25（b6aac90）均收口；sts 交互模拟器已完整（含回滚现场演示 + 命令解析可测化）。进入空闲决策点。**
 
 最近完成的工作（M21）：
 
@@ -66,7 +66,22 @@
 2. 全有或全无（跨信号分布式回滚）仍未支持；业务层通过 guard 补偿。这是语义边界而非 bug。
 3. M21 reserve_inventory 回滚 seam 在 sts 仍为 stub（恒 Ok），M23 测试用独立 fixture 覆盖同一语义，与 example 路径互不干扰。
 
-### M24：v0.11 WASM 多语言绑定（低优先级，依赖团队跨平台需求再排期）
+### M25：sts 圆整——回滚现场演示 + 命令解析可测化（自定，本轮）
+
+想法起点三大后续事项（事务回滚 ✅、模拟调试 ✅、多语言绑定 M24 低优先级）外，sts 这个「交互式模拟器」还有两处没圆：回滚是「静态缝」而非「可现场演示」、命令解析不可测。本里程碑把 sts 真正补成「无需写 Rust 即可观察整条链路（含回滚）」的工具；全程不改 engine。
+
+- [x] 回滚现场演示：`StsSession` 持 `Rc<RefCell<HashSet<String>>> fail_set`；动作闭包命中集合时返 `ActionExecutionError`，引擎既有 M19 回滚路径点火。`fail <action_id>` 插入（持续失败直到 `reset`）；`reset` 清空。引擎零改动。
+- [x] 命令解析可测化：抽 `parse_command(line) -> Result<Command, ParseError>` + `Command` enum（Event/State/Trace/Help/Quit/Fail/Reset/Unknown）；主循环只做 IO + 派发。
+- [x] 测试：sts.rs 底部 9 个单元测试（解析路由 + session fail/reset 与闭包共享状态）；tests/sts_fail_command_test.rs 2 个集成测试（fail→可观测回滚；sticky 直到 reset）。总测试 100 个全绿。
+- [x] doc/shell.md 新增「在 sts 里现场演示回滚」章节（含实跑 order_approval 的可照抄转录）+ 命令列表补 fail/reset。
+- [x] 提交 `b6aac90`：doc/shell.md +79 / src/bin/sts.rs +369/−36 / tests/sts_fail_command_test.rs +204。
+
+观察（留给后续轮次，不阻塞 M25）：
+
+1. `order_approval.json` 的 `approve` 只能从 `submitted` 触发，无法在同一信号上「成功→fail→再 approve」原样复现；转录据实写成「submit→fail→approve 回滚→reset→approve 成功」。若要更顺手的教学流，可给示例拓扑补一个逆向转移（示例改动，不影响引擎/测试）。
+2. fail_set 是进程内 Rc<RefCell>；未来若要在 stt scenario 层声明「某步某动作失败」，可把它抽到 schema fixture 层——超出 M25，且触及测试/engine 边界，先不动。
+
+### M24：v0.11 WASM 多语言绑定（低优先级，依赖团队跨平台需求再排期，暂不排）
 
 - 可行性调研：`cargo build --target wasm32-unknown-unknown` 验证零依赖是否友好。
 - `wasm-bindgen` 封装 + 浏览器极简 demo。
