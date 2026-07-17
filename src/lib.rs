@@ -4,6 +4,10 @@ pub mod error;
 pub mod export;
 pub mod guard;
 pub mod persist;
+/// Shared scaffolding for the `sts` / `stt` / `stp` binaries: turns a topology
+/// file + a shared fail-set into a runnable engine. Not part of the stable
+/// library surface -- treat it as build support for the binaries; binary usage
+/// and docs take precedence over these APIs.
 pub mod run;
 pub mod schema;
 pub mod trace;

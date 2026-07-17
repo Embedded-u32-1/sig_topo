@@ -42,6 +42,7 @@ cargo run --bin sts -- examples/order_approval.json
 | `trace`     | Ordered log of `TraceEvent`s (`EventReceived`, `StateChanged`, action lifecycle) produced while running. |
 | `persist`   | `save_state` / `load_state` / `reload_topology`: snapshot and restore engine state to/from JSON. |
 | `export`    | `to_dot`: render a topology to Graphviz DOT for visualization. |
+| `run`       | Shared scaffolding for the `sts` / `stt` / `stp` binaries: builds a runnable engine from a topology + fail-set. Not a stable library API. |
 
 ## Documentation
 
@@ -52,6 +53,8 @@ cargo run --bin sts -- examples/order_approval.json
 - [Tracing](doc/tracing.md) — the trace log and event lifecycle.
 - [Composition](doc/composition.md) — components, instances, and includes (v0.7).
 - [Shell](doc/shell.md) — the `sts` interactive REPL (commands, debugging, end-to-end demo).
+- [Transaction](doc/transaction.md) — single-signal transactional rollback semantics (v0.8).
+- [Run module](doc/run.md) — shared `sts`/`stt`/`stp` scaffolding (not a stable library API).
 - [Roadmap](doc/roadmap.md) — milestone history and upcoming direction.
 
 ## Tests
@@ -60,7 +63,7 @@ cargo run --bin sts -- examples/order_approval.json
 cargo test
 ```
 
-71 tests across unit, integration, and CLI test files. All should pass with zero failures before merging.
+100 tests across unit, integration, and CLI test files. All should pass with zero failures before merging.
 
 ## License
 
