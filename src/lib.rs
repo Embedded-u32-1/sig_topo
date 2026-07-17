@@ -106,6 +106,11 @@ pub use export::to_dot;
 /// Render a topology to DOT with each signal's *current* state highlighted
 /// lightgreen.
 pub use export::to_dot_with_state;
+/// Render a topology to DOT with live-state highlighting *plus* cross-signal
+/// reaction edges colored by their guard-evaluation result (fired = solid
+/// green, blocked = dashed gray, guard error = dashed red, never evaluated =
+/// dashed black).
+pub use export::to_dot_extended;
 /// Evaluate a guard expression against an `ActionContext`, returning `true` to
 /// allow the transition.
 pub use guard::eval_guard;

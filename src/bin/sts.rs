@@ -53,6 +53,7 @@ fn main() {
             Ok(Command::Fail { action_id }) => session.fail(&action_id),
             Ok(Command::Reset) => session.reset(),
             Ok(Command::Dot) => cmd_dot(&session),
+            Ok(Command::DotExt) => cmd_dot_ext(&session),
             Ok(Command::Why {
                 from_signal,
                 from_state,
@@ -134,6 +135,7 @@ enum Command {
     },
     Reset,
     Dot,
+    DotExt,
     Why {
         from_signal: String,
         from_state: String,
@@ -195,6 +197,7 @@ fn parse_command(line: &str) -> Result<Command, ParseError> {
         },
         Some("reset") => Ok(Command::Reset),
         Some("dot") => Ok(Command::Dot),
+        Some("dot-ext") => Ok(Command::DotExt),
         Some("why") => {
             if parts.len() < 5 {
                 return Err(ParseError::WhyArgs);
@@ -276,6 +279,16 @@ fn cmd_dot(session: &StsSession) {
     print!("{}", session.engine.snapshot_dot());
 }
 
+/// `dot-ext` — print the extended DOT: live-state highlighting plus
+/// cross-signal reaction edges colored by their guard-evaluation result. A
+/// green solid edge fired, a gray dashed edge was guard-blocked, a red dashed
+/// edge's guard errored, and a black dashed edge was never evaluated this run.
+/// This is the visual companion to `why`: `why` tells you the guard result for
+/// one reaction as text, `dot-ext` shows every reaction at a glance.
+fn cmd_dot_ext(session: &StsSession) {
+    print!("{}", session.engine.snapshot_dot_extended());
+}
+
 /// `why <from> <state> <to> <event>` — print every `ReactionGuardEvaluated` trace
 /// event for the reaction `from.state -> to.event`, so a user can see why it
 /// fired (`result=true`), was skipped (`result=false`), or was skipped because
@@ -306,6 +319,7 @@ fn cmd_help() {
     println!("  state                                   list all signal states");
     println!("  trace                                   print the trace log");
     println!("  dot                                     print runtime-highlighted DOT");
+    println!("  dot-ext                                 print extended DOT with guard-eval result edges");
     println!("  fail <action_id>                        force that action to fail");
     println!("  reset                                   clear forced-failure set");
     println!("  why <from> <state> <to> <event>         print guard evaluation trace for a reaction");
@@ -392,6 +406,11 @@ mod tests {
             ParseError::FailActionId
         );
         assert_eq!(parse_command("reset").unwrap(), Command::Reset);
+    }
+
+    #[test]
+    fn parse_dot_ext_command() {
+        assert_eq!(parse_command("dot-ext").unwrap(), Command::DotExt);
     }
 
     #[test]

@@ -541,6 +541,52 @@ impl TopologyEngine {
         crate::export::to_dot_with_state(&schema, &states)
     }
 
+    /// Render the topology as Graphviz DOT with reaction edges colored by
+    /// their guard-evaluation result (see `crate::export::to_dot_extended`).
+    ///
+    /// Combines the live-state highlight of `snapshot_dot()` with the reaction
+    /// edges of the extended renderer. The `states` map and a per-reaction
+    /// guard-result map are reconstructed from runtime: states from each
+    /// signal's `current`, and guard results from the most recent
+    /// `ReactionGuardEvaluated` trace event keyed by
+    /// `(from_signal, from_state, to_signal, event)`. A reaction absent from
+    /// the trace is drawn dashed black and labeled `not evaluated`.
+    ///
+    /// Reaction edges are rendered even when no guard has been evaluated yet,
+    /// so the diagram always shows the topology's full cascade wiring; only
+    /// the coloring reflects what actually ran.
+    pub fn snapshot_dot_extended(&self) -> String {
+        let states: HashMap<String, String> = self
+            .signals
+            .iter()
+            .map(|(id, sig)| (id.clone(), sig.current.clone()))
+            .collect();
+
+        let guard_info = guard_info_from_traces(self.traces());
+
+        let signals: Vec<SignalDef> = self
+            .signals
+            .iter()
+            .map(|(id, sig)| SignalDef {
+                id: id.clone(),
+                initial_state: sig.initial_state.clone(),
+                states: sig.states.clone(),
+            })
+            .collect();
+
+        let schema = TopologySchema {
+            version: "snapshot".to_string(),
+            signals,
+            transitions: self.transitions.clone(),
+            reactions: self.reactions.clone(),
+            components: None,
+            instances: Vec::new(),
+            includes: Vec::new(),
+        };
+
+        crate::export::to_dot_extended(&schema, &states, &guard_info)
+    }
+
     /// Replace the engine's topology while preserving current signal states.
     ///
     /// Existing signals keep their current state; new signals start at their
@@ -620,6 +666,39 @@ impl TopologyEngine {
         let events: Vec<Value> = self.trace.events().iter().map(trace_event_to_value).collect();
         Value::from(events).to_string()
     }
+}
+
+/// Collect the most recent guard-evaluation result per reaction from a trace.
+///
+/// Returns `(from_signal, from_state, to_signal, event) -> result` keyed by
+/// `ReactionGuardEvaluated` events, keeping the last result seen for each
+/// reaction (the cascade may evaluate a reaction more than once). Reactions
+/// absent from the trace are simply absent from the map — the renderer draws
+/// those edges dashed black and labels them `not evaluated`.
+fn guard_info_from_traces(traces: &[TraceEvent]) -> HashMap<(String, String, String, String), String> {
+    let mut guard_info = HashMap::new();
+    for event in traces {
+        if let TraceEvent::ReactionGuardEvaluated {
+            reaction_from_signal,
+            reaction_from_state,
+            reaction_to_signal,
+            reaction_event,
+            result,
+            ..
+        } = event
+        {
+            guard_info.insert(
+                (
+                    reaction_from_signal.clone(),
+                    reaction_from_state.clone(),
+                    reaction_to_signal.clone(),
+                    reaction_event.clone(),
+                ),
+                result.clone(),
+            );
+        }
+    }
+    guard_info
 }
 
 /// Hand-write a `TraceEvent` to a JSON value, mirroring the representation

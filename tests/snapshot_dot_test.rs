@@ -105,3 +105,80 @@ fn snapshot_dot_is_valid_digraph() {
     assert!(dot.contains("subgraph cluster_order"));
     assert!(dot.contains("subgraph cluster_payment"));
 }
+
+// A four-signal topology: driving `A.go` commits A to `a1` and triggers three
+// reactions keyed on `A` entering `a1`. Their three guards evaluate to
+// `true`, `false`, and `error` against the same payload, so the extended DOT
+// exercises every guard-result color on distinct edges in one snapshot.
+const GUARDED_CASCADE: &str = r#"{
+  "version": "0.1",
+  "signals": [
+    { "id": "A", "initial_state": "a0", "states": ["a0", "a1"] },
+    { "id": "B", "initial_state": "b0", "states": ["b0", "b1"] },
+    { "id": "C", "initial_state": "c0", "states": ["c0", "c1"] },
+    { "id": "D", "initial_state": "d0", "states": ["d0", "d1"] }
+  ],
+  "transitions": [
+    { "signal_id": "A", "from": "a0", "event": "go", "to": "a1" },
+    { "signal_id": "B", "from": "b0", "event": "react", "to": "b1" },
+    { "signal_id": "C", "from": "c0", "event": "react", "to": "c1" },
+    { "signal_id": "D", "from": "d0", "event": "react", "to": "d1" }
+  ],
+  "reactions": [
+    { "from_signal": "A", "from_state": "a1", "to_signal": "B", "event": "react",
+      "guard": "payload.enable == true" },
+    { "from_signal": "A", "from_state": "a1", "to_signal": "C", "event": "react",
+      "guard": "payload.enable == false" },
+    { "from_signal": "A", "from_state": "a1", "to_signal": "D", "event": "react",
+      "guard": "payload.x + \"s\"" }
+  ]
+}"#;
+
+#[test]
+fn snapshot_dot_extended_includes_guard_edges() {
+    let mut engine =
+        TopologyEngine::from_json(GUARDED_CASCADE).expect("topology should parse and validate");
+
+    // `enable == true` -> B's reaction fires (guard result `true`);
+    // `enable == false` -> C's reaction is blocked (guard result `false`);
+    // `payload.x + "s"` -> x is absent => Null; Null + "s" errors (result
+    // `error: ...`). The main transition still commits.
+    engine
+        .send_event("A", "go", Some(serde_json::json!({ "enable": true })))
+        .expect("A.go should commit");
+    assert_eq!(engine.get_state("A").unwrap(), "a1");
+
+    let dot = engine.snapshot_dot_extended();
+
+    // guard=true  -> solid green.
+    assert!(
+        dot.contains(
+            "n_A_a1 -> n_B_b0 [label=\"react [guard: true]\" color=green style=solid]"
+        ),
+        "guard=true edge should be solid green; got:\n{}",
+        dot
+    );
+    // guard=false -> dashed gray.
+    assert!(
+        dot.contains(
+            "n_A_a1 -> n_C_c0 [label=\"react [guard: false]\" color=gray style=dashed]"
+        ),
+        "guard=false edge should be dashed gray; got:\n{}",
+        dot
+    );
+    // guard=error -> dashed red. The exact error text is an implementation detail
+    // of the guard evaluator, so assert the edge id and color rather than the
+    // message.
+    assert!(
+        dot.contains("n_A_a1 -> n_D_d0") && dot.contains("color=red style=dashed"),
+        "guard=error edge should be dashed red; got:\n{}",
+        dot
+    );
+
+    // Live state highlight is preserved on top of the reaction edges.
+    assert!(dot.contains(
+        "n_A_a1 [label=\"a1\" style=filled fillcolor=lightgreen penwidth=2]"
+    ));
+    assert!(dot.starts_with("digraph Topology {"));
+    assert!(dot.ends_with("}\n"));
+}

@@ -102,3 +102,37 @@ Per state node, first match wins:
 - **Everything else** → no extra attributes.
 
 So when current ≠ initial you see both cues at once (lightblue = "started here", lightgreen = "is here now"); when they coincide, lightgreen wins. On a fresh engine, where current == initial for every signal, only lightgreen appears. This is implemented by `to_dot_with_state(schema, states)` in `src/export/dot.rs`; passing an empty `states` map reproduces the plain skeleton exactly.
+
+## Extended DOT with guard-eval result
+
+The views above render *states* and *transitions*. To see the cross-signal **reaction** wiring and, crucially, whether each reaction's guard let it fire, the engine can render an *extended* DOT that overlays reaction edges colored by their guard-evaluation result.
+
+### `dot-ext` command in `sts`
+
+Inside the `sts` shell, `dot-ext` prints the extended view:
+
+```
+sts> dot-ext
+digraph Topology {
+...
+  n_order_approved -> n_inventory_idle [label="allocate [guard: true]" color=green style=solid];
+  n_order_approved -> n_audit_idle [label="note [guard: false]" color=gray style=dashed];
+}
+```
+
+Like `dot`, it highlights each signal's current state. In addition it draws one dashed arrow per reaction, from the watched state of `from_signal` to an anchor node in `to_signal`'s cluster, colored by the guard result recorded in the trace:
+
+- **solid green** — guard evaluated to `true`; the reaction fired.
+- **dashed gray** — guard evaluated to `false`; the cascade was blocked (the main transition still committed).
+- **dashed red** — guard failed to evaluate (`error: <msg>`); the reaction was skipped.
+- **dashed black** — `not evaluated`; the reaction's guard was never evaluated this run (the watched state was not reached, or the reaction has no guard).
+
+Reaction edges are the visual companion to `why`: `why` reports one reaction's guard trace as text, while `dot-ext` shows every reaction at a glance.
+
+### `TopologyEngine::snapshot_dot_extended`
+
+Programmatically, `engine.snapshot_dot_extended()` returns the same extended DOT as a `String`. It reconstructs the schema from runtime state and keys each reaction's color off the most recent `ReactionGuardEvaluated` trace event, so a reaction absent from the trace renders dashed-black `not evaluated`.
+
+### How colors are decided
+
+Implemented by `to_dot_extended(schema, states, guard_info)` in `src/export/dot.rs`. `guard_info` maps each reaction `(from_signal, from_state, to_signal, event)` to its guard-result string (`"true"`, `"false"`, or `"error: <msg>"`); a reaction missing from the map is drawn dashed black. The reaction's tail anchors on the watched `from_state` node (or, for a `*` wildcard reaction, the signal's current state), and its head anchors on the target signal's first state — a reaction delivers an *event* to a signal rather than targeting a particular state, so the first state is a stable in-cluster landing point.
