@@ -1,7 +1,11 @@
-// M32: reaction guard that fails → cascade skipped, main transition commits.
+// M34: reaction guard that fails → cascade skipped, main transition commits.
 //
-// Same topology as reaction_guard.ddl, but the guard is `false`. The engine
-// must skip the cascade while still committing the order -> approved transition.
+// Same topology as reaction_guard.ddl. The reaction guard `payload.auto ==
+// true` is evaluated against the source event's payload; here `approve` is sent
+// with `{"auto": false}`, so the guard is false and the cascade is skipped
+// while the main `order -> approved` transition still commits. The reaction's
+// static payload `{ "auto": true }` (the `with { ... }` block) is delivered to
+// the target only when the cascade fires, so it is irrelevant here.
 
 signal order {
     states: [submitted, approved]
@@ -18,5 +22,7 @@ signal inventory {
 }
 
 reaction {
-    when order enters approved -> inventory allocate when false
+    when order enters approved -> inventory allocate
+        when payload.auto == true
+        with { "auto": true }
 }

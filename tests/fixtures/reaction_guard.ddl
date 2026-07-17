@@ -1,8 +1,11 @@
-// M32: reaction guard that passes → cascade fires.
+// M34: reaction guard that passes + static payload → cascade fires with a
+// payload.
 //
-// The guard `true` is payload-independent (DDL does not yet emit reaction
-// payloads; see M28). It exercises the full path: DDL source → ReactionDef.guard
-// → engine guard eval → cascade fires.
+// Reaction guard `payload.auto == true` is evaluated against the source event's
+// payload (here `{"auto": true}` sent on `approve`). The reaction's static
+// payload `{ "auto": true }` (the `with { ... }` block) is delivered as the
+// derived event's payload to the target signal. See `engine::send_event_internal`
+// M32/M34 for how the two payloads differ.
 
 signal order {
     states: [submitted, approved]
@@ -19,5 +22,7 @@ signal inventory {
 }
 
 reaction {
-    when order enters approved -> inventory allocate when true
+    when order enters approved -> inventory allocate
+        when payload.auto == true
+        with { "auto": true }
 }

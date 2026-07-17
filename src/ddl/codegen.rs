@@ -23,15 +23,23 @@ pub fn emit(doc: DdlDoc) -> Result<TopologySchema, EngineError> {
         signals.push(SignalDef {
             id: sig.id.clone(),
             initial_state: sig.initial,
-            states: sig.states,
+            states: sig.states.clone(),
         });
 
         for tr in sig.transitions {
-            transitions.push(emit_transition(&sig.id, tr));
+            // M34: a wildcard `from *` lowers to one transition per source
+            // state (including the `to -> to` self-loop the engine matches via
+            // `t.from == signal.current`, so the self-loop is harmless). All
+            // expanded arms share the same event/to/actions/guard.
+            transitions.extend(emit_transition(&sig.id, &sig.states, tr)?);
         }
     }
 
-    let reactions = doc.reactions.into_iter().map(emit_reaction).collect();
+    let reactions = doc
+        .reactions
+        .into_iter()
+        .map(emit_reaction)
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(TopologySchema {
         version: "0.1".to_string(),
@@ -44,8 +52,34 @@ pub fn emit(doc: DdlDoc) -> Result<TopologySchema, EngineError> {
     })
 }
 
-fn emit_transition(signal_id: &str, tr: TransDecl) -> TransitionDef {
-    TransitionDef {
+/// Lower a single transition. When `tr.from == "*"`, the caller supplies the
+/// signal's `states` so we can expand into one `TransitionDef` per source state
+/// (see `emit`); otherwise this returns exactly one transition with `from`
+/// untouched.
+fn emit_transition(
+    signal_id: &str,
+    states: &[String],
+    tr: TransDecl,
+) -> Result<Vec<TransitionDef>, EngineError> {
+    if tr.from == "*" {
+        let mut out = Vec::with_capacity(states.len());
+        for from in states {
+            out.push(TransitionDef {
+                signal_id: signal_id.to_string(),
+                from: from.clone(),
+                event: tr.event.clone(),
+                to: tr.to.clone(),
+                actions: ActionBinding {
+                    on_exit: tr.actions.on_exit.clone(),
+                    on_transition: tr.actions.on_transition.clone(),
+                    on_enter: tr.actions.on_enter.clone(),
+                },
+                guard: tr.guard.clone(),
+            });
+        }
+        return Ok(out);
+    }
+    Ok(vec![TransitionDef {
         signal_id: signal_id.to_string(),
         from: tr.from,
         event: tr.event,
@@ -56,18 +90,29 @@ fn emit_transition(signal_id: &str, tr: TransDecl) -> TransitionDef {
             on_enter: tr.actions.on_enter,
         },
         guard: tr.guard,
-    }
+    }])
 }
 
-fn emit_reaction(r: super::parser::ReactionDecl) -> ReactionDef {
-    ReactionDef {
+fn emit_reaction(r: super::parser::ReactionDecl) -> Result<ReactionDef, EngineError> {
+    let payload = match r.payload {
+        Some(raw) => Some(
+            serde_json::from_str::<serde_json::Value>(&raw).map_err(|e| {
+                EngineError::ParseError(format!(
+                    "reaction payload is not valid JSON: {}",
+                    e
+                ))
+            })?,
+        ),
+        None => None,
+    };
+    Ok(ReactionDef {
         from_signal: r.from_signal,
         from_state: r.from_state,
         to_signal: r.to_signal,
         event: r.event,
-        payload: None,
+        payload,
         guard: r.guard,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -152,6 +197,7 @@ mod tests {
                 to_signal: "fulfill".to_string(),
                 event: "begin".to_string(),
                 guard: None,
+                payload: None,
             }],
         })
         .unwrap();
@@ -177,11 +223,55 @@ mod tests {
                 to_signal: "fulfill".to_string(),
                 event: "begin".to_string(),
                 guard: Some("payload.auto".to_string()),
+                payload: None,
             }],
         })
         .unwrap();
 
         assert_eq!(schema.reactions.len(), 1);
         assert_eq!(schema.reactions[0].guard, Some("payload.auto".to_string()));
+    }
+
+    #[test]
+    fn codegen_reaction_with_payload_passes_through() {
+        // M34: a reaction's `with { ... }` static payload (captured as raw text
+        // by the parser) is parsed to JSON and lands in `ReactionDef.payload`.
+        let schema = emit(DdlDoc {
+            signals: vec![],
+            reactions: vec![crate::ddl::parser::ReactionDecl {
+                from_signal: "order".to_string(),
+                from_state: "approved".to_string(),
+                to_signal: "fulfill".to_string(),
+                event: "begin".to_string(),
+                guard: None,
+                payload: Some(r#"{ "auto": true, "count": 1 }"#.to_string()),
+            }],
+        })
+        .unwrap();
+
+        assert_eq!(schema.reactions.len(), 1);
+        assert_eq!(
+            schema.reactions[0].payload,
+            Some(serde_json::json!({"auto": true, "count": 1 }))
+        );
+    }
+
+    #[test]
+    fn codegen_reaction_payload_invalid_json_is_error() {
+        // A malformed `with { ... }` block must surface as a ParseError from
+        // codegen, not a panic.
+        let err = emit(DdlDoc {
+            signals: vec![],
+            reactions: vec![crate::ddl::parser::ReactionDecl {
+                from_signal: "order".to_string(),
+                from_state: "approved".to_string(),
+                to_signal: "fulfill".to_string(),
+                event: "begin".to_string(),
+                guard: None,
+                payload: Some(r#"{ not json }"#.to_string()),
+            }],
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("not valid JSON"), "got: {}", err);
     }
 }

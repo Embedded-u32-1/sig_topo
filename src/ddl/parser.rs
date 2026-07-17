@@ -55,6 +55,9 @@ pub struct ReactionDecl {
     pub to_signal: String,
     pub event: String,
     pub guard: Option<String>,
+    /// The raw source text of an optional `with { ... }` static payload block,
+    /// e.g. `{ "auto": true }`. `None` when the reaction carries no payload.
+    pub payload: Option<String>,
 }
 
 struct Parser<'a> {
@@ -220,13 +223,23 @@ impl<'a> Parser<'a> {
         let (event, _) = self.expect_any_ident()?;
 
         self.expect_keyword(TokenKind::From)?;
-        let (from, from_tok) = self.expect_any_ident()?;
-        if from != "*" && !states.contains(&from) {
-            return Err(format!(
-                "line {} col {}: 'from' state '{}' is not in the states list for '{}'",
-                from_tok.line, from_tok.col, from, signal_id
-            ));
-        }
+        // M34: `from *` is an explicit wildcard that lowers to one transition
+        // per source state (including the `to -> to` self-loop). The lexer
+        // emits `*` as a `Mul` token, so handle it here rather than via
+        // `expect_any_ident` (which would reject `*`).
+        let from = if matches!(self.peek().kind, TokenKind::Mul) {
+            self.advance();
+            "*".to_string()
+        } else {
+            let (s, tok) = self.expect_any_ident()?;
+            if !states.contains(&s) {
+                return Err(format!(
+                    "line {} col {}: 'from' state '{}' is not in the states list for '{}'",
+                    tok.line, tok.col, s, signal_id
+                ));
+            }
+            s
+        };
 
         self.expect_keyword(TokenKind::Arrow)?;
 
@@ -272,9 +285,12 @@ impl<'a> Parser<'a> {
         self.expect_keyword(TokenKind::When)?;
 
         // The guard must contain at least one token before the terminator.
+        // Terminators are structural tokens that can legally follow a guard:
+        // the `{` of an action block, the `}` of a reaction, EOF, and the `with`
+        // keyword that opens a reaction's optional static payload block.
         let first_tok = self.peek();
         match first_tok.kind {
-            TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof => {
+            TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof | TokenKind::With => {
                 return Err(format!(
                     "line {} col {}: 'when' requires a guard expression",
                     first_tok.line, first_tok.col
@@ -288,7 +304,7 @@ impl<'a> Parser<'a> {
 
         loop {
             match self.peek().kind {
-                TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof => break,
+                TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof | TokenKind::With => break,
                 _ => {
                     end_idx = self.pos;
                     self.advance();
@@ -316,7 +332,16 @@ impl<'a> Parser<'a> {
         ) {
             let hook_tok = self.advance();
             self.expect_keyword(TokenKind::Colon)?;
-            let (action, _) = self.expect_any_ident()?;
+            // M34: a hook binds a comma-separated list of action ids, e.g.
+            // `on_transition: x, y, z`. Zero actions (`on_exit: ,`) is rejected
+            // by the leading `expect_any_ident` below.
+            let (first, _) = self.expect_any_ident()?;
+            let mut ids = vec![first];
+            while matches!(self.peek().kind, TokenKind::Comma) {
+                self.advance();
+                let (action, _) = self.expect_any_ident()?;
+                ids.push(action);
+            }
 
             match hook_tok.kind {
                 TokenKind::OnExit => {
@@ -327,7 +352,7 @@ impl<'a> Parser<'a> {
                         ));
                     }
                     seen_exit = true;
-                    actions.on_exit.push(action);
+                    actions.on_exit = ids;
                 }
                 TokenKind::OnTransition => {
                     if seen_transition {
@@ -337,7 +362,7 @@ impl<'a> Parser<'a> {
                         ));
                     }
                     seen_transition = true;
-                    actions.on_transition.push(action);
+                    actions.on_transition = ids;
                 }
                 TokenKind::OnEnter => {
                     if seen_enter {
@@ -347,7 +372,7 @@ impl<'a> Parser<'a> {
                         ));
                     }
                     seen_enter = true;
-                    actions.on_enter.push(action);
+                    actions.on_enter = ids;
                 }
                 _ => unreachable!(),
             }
@@ -379,12 +404,18 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // Optional empty payload block `{}` (reserved for future payload
-        // templates; ignored for now). Matches the canonical example.
-        if matches!(self.peek().kind, TokenKind::LBrace) {
+        // Optional static payload block: `with { ... }`. Matches the canonical
+        // example's empty `{}` block (reserved, ignored) when `with` is absent.
+        let payload = if matches!(self.peek().kind, TokenKind::With) {
+            self.advance();
+            Some(self.parse_raw_brace_block()?)
+        } else if matches!(self.peek().kind, TokenKind::LBrace) {
             self.advance();
             self.expect_keyword(TokenKind::RBrace)?;
-        }
+            None
+        } else {
+            None
+        };
 
         self.expect_keyword(TokenKind::RBrace)?;
 
@@ -394,7 +425,40 @@ impl<'a> Parser<'a> {
             to_signal,
             event,
             guard,
+            payload,
         })
+    }
+
+    /// Consume a `{ ... }` block (the leading `{` is the current token) and
+    /// return its raw source text from the opening `{` through the matching
+    /// `}` — braces nested inside are tracked by depth. Used to capture a
+    /// reaction's `with { ... }` static payload verbatim for JSON parsing in
+    /// codegen.
+    fn parse_raw_brace_block(&mut self) -> Result<String, String> {
+        let open = self.expect(&TokenKind::LBrace)?;
+        let start = open.start;
+        let mut depth = 1usize;
+        loop {
+            let tok = self.peek();
+            if matches!(tok.kind, TokenKind::LBrace) {
+                depth += 1;
+                self.advance();
+            } else if matches!(tok.kind, TokenKind::RBrace) {
+                depth -= 1;
+                let end = tok.start + tok.len;
+                self.advance();
+                if depth == 0 {
+                    return Ok(self.src[start..end].to_string());
+                }
+            } else if matches!(tok.kind, TokenKind::Eof) {
+                return Err(format!(
+                    "line {} col {}: unterminated 'with' payload block",
+                    tok.line, tok.col
+                ));
+            } else {
+                self.advance();
+            }
+        }
     }
 }
 
@@ -608,6 +672,102 @@ signal s {
         )
         .unwrap_err();
         assert!(err.contains("'from' state 'z'"), "got: {}", err);
+    }
+
+    #[test]
+    fn parse_wildcard_from() {
+        let doc = src_to_doc(
+            r#"
+signal s {
+    states: [a, b, c]
+    initial: a
+
+    on reset from * -> a
+}
+"#,
+        )
+        .unwrap();
+
+        let s = &doc.signals[0];
+        assert_eq!(s.transitions.len(), 1);
+        assert_eq!(s.transitions[0].from, "*");
+        assert_eq!(s.transitions[0].to, "a");
+        assert_eq!(s.transitions[0].event, "reset");
+    }
+
+    #[test]
+    fn parse_multi_action_hooks_preserve_order() {
+        let doc = src_to_doc(
+            r#"
+signal s {
+    states: [a, b]
+    initial: a
+
+    on go from a -> b {
+        on_exit: e1, e2
+        on_transition: t1, t2, t3
+        on_enter: n1
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let tr = &doc.signals[0].transitions[0];
+        assert_eq!(tr.actions.on_exit, vec!["e1", "e2"]);
+        assert_eq!(tr.actions.on_transition, vec!["t1", "t2", "t3"]);
+        assert_eq!(tr.actions.on_enter, vec!["n1"]);
+    }
+
+    #[test]
+    fn parse_zero_action_hook_is_rejected() {
+        // An `on_exit:` with no following identifier is a parse error.
+        let err = src_to_doc(
+            r#"
+signal s {
+    states: [a, b]
+    initial: a
+
+    on go from a -> b {
+        on_exit: ,
+    }
+}
+"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("expected identifier"), "got: {}", err);
+    }
+
+    #[test]
+    fn parse_reaction_with_payload() {
+        let doc = src_to_doc(
+            r#"
+reaction {
+    when order enters approved -> inventory allocate when true
+    with { "auto": true, "count": 1 }
+}
+"#,
+        )
+        .unwrap();
+
+        let r = &doc.reactions[0];
+        assert_eq!(r.guard, Some("true".to_string()));
+        assert_eq!(r.payload, Some(r#"{ "auto": true, "count": 1 }"#.to_string()));
+    }
+
+    #[test]
+    fn parse_reaction_without_payload_still_works() {
+        let doc = src_to_doc(
+            r#"
+reaction {
+    when order enters approved -> inventory allocate when true
+}
+"#,
+        )
+        .unwrap();
+
+        let r = &doc.reactions[0];
+        assert!(r.payload.is_none());
     }
 
     #[test]

@@ -18,7 +18,7 @@ Path: `examples/scenarios/gate_flow/`.
 |------|-------|----|-------|---------|
 | `closed` | `open` | `open` | — | `on_transition: activate_motor`, `on_enter: log_gate_open` |
 | `open` | `close` | `closed` | — | `on_transition: deactivate_motor`, `on_enter: log_gate_closed` |
-| `open` | `fault` | `fault` | `payload.emergency == true` | `on_transition: engage_brake`, `on_enter: log_fault` |
+| `open` | `fault` | `fault` | `payload.emergency == true` | `on_transition: engage_brake, engage_backup_brake`, `on_enter: log_fault` |
 | `closed` | `reset` | `closed` | — | `on_transition: clear_fault_safely`, `on_enter: log_reset` |
 | `open` | `reset` | `closed` | — | `on_transition: clear_fault_safely`, `on_enter: log_reset` |
 | `fault` | `reset` | `closed` | — | `on_transition: clear_fault_safely`, `on_enter: log_reset` |
@@ -27,7 +27,7 @@ Path: `examples/scenarios/gate_flow/`.
 ## Teaching points
 
 - **Guard**: `fault` only fires when `payload.emergency == true`. Sending `fault` with `{"emergency":false}` is blocked (`GuardBlocked`) and the state stays `open`.
-- **Wildcard `*`**: the JSON fixture writes the reset as the single wildcard `on reset from * -> closed`; the DDL compiler (v0.12) lowers it to one `reset` transition per source state, which is behaviorally identical. A `reset` from any state funnels back to `closed` (the explicit `fault -> repair -> closed` path is separate).
+- **Wildcard `*`**: the DDL writes the reset directly as the single wildcard `on reset from * -> closed` (M34); the compiler lowers it to one `reset` transition per source state, behaviorally identical to the JSON form. A `reset` from any state funnels back to `closed` (the explicit `fault -> repair -> closed` path is separate).
 - **Wildcard proves it is live**: the `closed -> closed` reset arm emits a `StateChanged gate: closed -> closed`. This self-loop is the proof that the wildcard matches the *current* state rather than acting as a no-op.
 
 ## Scenario
@@ -77,9 +77,11 @@ sts> state
 gate: open
 sts> event gate fault {"emergency":true}
 [action] gate.engage_brake
+[action] gate.engage_backup_brake
 [action] gate.log_fault
 gate -> fault
   action executed: engage_brake
+  action executed: engage_backup_brake
   action executed: log_fault
 sts> state
 gate: fault

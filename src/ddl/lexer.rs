@@ -72,11 +72,15 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
         let start_col = col;
 
         // String literal: single-quoted, no escape handling (matches guard).
-        if c == '\'' {
+        // Also accepts double-quoted strings so a reaction's `with { ... }`
+        // static payload (JSON) can contain `"..."` string values without
+        // tripping the lexer. Both quote styles desugar to `TokenKind::String`.
+        if c == '\'' || c == '"' {
+            let quote = c;
             i += 1;
             col += 1;
             let mut s = String::new();
-            while i < chars.len() && chars[i] != '\'' {
+            while i < chars.len() && chars[i] != quote {
                 if chars[i] == '\n' {
                     return Err(format!(
                         "line {} col {}: unterminated string literal",
@@ -172,6 +176,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
                 "when" => TokenKind::When,
                 "reaction" => TokenKind::Reaction,
                 "enters" => TokenKind::Enters,
+                "with" => TokenKind::With,
                 "on_exit" => TokenKind::OnExit,
                 "on_transition" => TokenKind::OnTransition,
                 "on_enter" => TokenKind::OnEnter,

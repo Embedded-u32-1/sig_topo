@@ -187,8 +187,15 @@ fn reaction_guard_end_to_end_via_ddl() {
         .expect("reaction_guard.ddl fixture should exist");
     let mut engine = engine_from_ddl(&ddl);
 
+    // The fixture's reaction guard is `payload.auto == true`, evaluated
+    // against the source event's payload (M32). Send `approve` carrying the
+    // matching payload so the guard passes and the cascade fires.
     engine
-        .send_event("order", "approve", None)
+        .send_event(
+            "order",
+            "approve",
+            Some(serde_json::json!({"auto": true})),
+        )
         .expect("main transition commits");
 
     assert_eq!(engine.get_state("order").unwrap(), "approved");
@@ -201,15 +208,20 @@ fn reaction_guard_end_to_end_via_ddl() {
 
 #[test]
 fn reaction_guard_end_to_end_ddl_blocks_when_false() {
-    // The same DDL fixture, but its reaction guard flipped to a constant
-    // `false`. The cascade must be skipped, while the main transition still
-    // commits — the headline M32 contract.
+    // The same DDL fixture topology, but `approve` is sent with
+    // `{"auto": false}`. The fixture's reaction guard `payload.auto == true`
+    // then evaluates to false, so the cascade must be skipped while the main
+    // transition still commits — the headline M32 contract.
     let ddl = std::fs::read_to_string("tests/fixtures/reaction_guard_block.ddl")
         .expect("reaction_guard_block.ddl fixture should exist");
     let mut engine = engine_from_ddl(&ddl);
 
     engine
-        .send_event("order", "approve", None)
+        .send_event(
+            "order",
+            "approve",
+            Some(serde_json::json!({"auto": false})),
+        )
         .expect("main transition commits");
 
     assert_eq!(engine.get_state("order").unwrap(), "approved");
@@ -218,6 +230,127 @@ fn reaction_guard_end_to_end_ddl_blocks_when_false() {
         "idle",
         "guard=false must skip the cascade"
     );
+}
+
+#[test]
+fn reaction_with_payload_reaches_reaction_def() {
+    // M34: a reaction's `with { ... }` static payload is parsed and lands in
+    // `ReactionDef.payload` as a valid JSON value. The engine would deliver it
+    // as the derived event's payload to the target signal when the cascade
+    // fires.
+    let src = r#"
+signal order {
+    states: [submitted, approved]
+    initial: submitted
+
+    on approve from submitted -> approved
+}
+
+signal inventory {
+    states: [idle, allocating]
+    initial: idle
+
+    on allocate from idle -> allocating
+}
+
+reaction {
+    when order enters approved -> inventory allocate
+        when payload.auto == true
+        with { "auto": true, "count": 1 }
+}
+"#;
+
+    let schema = signal_topology::ddl::compile(src).expect("reaction with payload must compile");
+    assert_eq!(schema.reactions.len(), 1);
+    assert_eq!(
+        schema.reactions[0].guard,
+        Some("payload.auto == true".to_string())
+    );
+    assert_eq!(
+        schema.reactions[0].payload,
+        Some(serde_json::json!({"auto": true, "count": 1 })),
+        "the static payload must reach ReactionDef.payload"
+    );
+}
+
+#[test]
+fn gate_flow_wildcard_from_end_to_end() {
+    // M34: the gate_flow.ddl writes the reset as a single `on reset from * ->
+    // closed`. After compiling, that must lower to three `reset` transitions
+    // (one per source state, including the `closed -> closed` self-loop), and
+    // the full scenario must replay with the expected guard block and final
+    // state `closed`.
+    let src = std::fs::read_to_string("examples/scenarios/gate_flow/gate_flow.ddl")
+        .expect("gate_flow.ddl should exist");
+    let schema = signal_topology::ddl::compile(&src).unwrap();
+
+    // The wildcard `reset` transition (from == "*") expanded to exactly three:
+    // closed/open/fault -> closed.
+    let reset_transitions: Vec<_> = schema
+        .transitions
+        .iter()
+        .filter(|t| t.event == "reset" && t.from != "*")
+        .collect();
+    assert_eq!(
+        reset_transitions.len(),
+        3,
+        "from * should expand to 3 reset transitions (with self-loop)"
+    );
+    let reset_froms: std::collections::HashSet<_> =
+        reset_transitions.iter().map(|t| t.from.as_str()).collect();
+    assert_eq!(
+        reset_froms,
+        ["closed", "open", "fault"].into_iter().collect()
+    );
+
+    // Every expanded reset arm shares the same actions/guard (identity check).
+    for t in &reset_transitions {
+        assert_eq!(t.actions.on_transition, vec!["clear_fault_safely"]);
+        assert_eq!(t.actions.on_enter, vec!["log_reset"]);
+        assert_eq!(t.to, "closed");
+    }
+
+    // Replay the scenario through the engine end-to-end.
+    let action_ids = signal_topology::run::collect_action_ids(&schema);
+    let mut engine = TopologyEngine::from_schema(schema).unwrap();
+    for id in &action_ids {
+        engine.register_action(id, |_| Ok(()));
+    }
+
+    // open
+    let res = engine.send_event("gate", "open", None).unwrap();
+    assert_eq!(res.executed_actions, vec!["activate_motor", "log_gate_open"]);
+    assert_eq!(engine.get_state("gate").unwrap(), "open");
+
+    // fault({emergency:false}) -> guard blocked
+    let err = engine
+        .send_event("gate", "fault", Some(serde_json::json!({"emergency": false})))
+        .unwrap_err();
+    assert!(matches!(err, signal_topology::EngineError::GuardBlocked { .. }));
+    assert_eq!(engine.get_state("gate").unwrap(), "open");
+
+    // fault({emergency:true}) -> open -> fault, multi on_transition actions
+    let res = engine
+        .send_event("gate", "fault", Some(serde_json::json!({"emergency": true})))
+        .unwrap();
+    assert_eq!(res.executed_actions, vec!["engage_brake", "engage_backup_brake", "log_fault"]);
+    assert_eq!(engine.get_state("gate").unwrap(), "fault");
+
+    // reset from fault -> closed (wildcard arm)
+    engine.send_event("gate", "reset", None).unwrap();
+    assert_eq!(engine.get_state("gate").unwrap(), "closed");
+
+    // open -> close (sanity)
+    engine.send_event("gate", "open", None).unwrap();
+    assert_eq!(engine.get_state("gate").unwrap(), "open");
+    engine.send_event("gate", "close", None).unwrap();
+    assert_eq!(engine.get_state("gate").unwrap(), "closed");
+
+    // reset from closed -> closed (self-loop proves * is live)
+    let res = engine.send_event("gate", "reset", None).unwrap();
+    assert_eq!(res.from, "closed");
+    assert_eq!(res.to, "closed");
+    assert_eq!(engine.get_state("gate").unwrap(), "closed");
 }
 
 #[test]

@@ -43,6 +43,7 @@ pub enum TokenKind {
     When,
     Reaction,
     Enters,
+    With,
     OnExit,
     OnTransition,
     OnEnter,

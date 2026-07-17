@@ -64,15 +64,16 @@ states_decl = "states" ":" "[" [ IDENT { "," IDENT } [ "," ] ] "]"
 
 initial_decl= "initial" ":" IDENT
 
-transition  = "on" IDENT "from" IDENT "->" IDENT
+transition  = "on" IDENT "from" ( IDENT | "*" ) "->" IDENT
               [ "when" guard_expr ]
               [ "{" { lifecycle } "}" ]
 
-lifecycle   = ("on_exit" | "on_transition" | "on_enter") ":" IDENT
+lifecycle   = ("on_exit" | "on_transition" | "on_enter")
+              ":" IDENT { "," IDENT }
 
 reaction    = "reaction"
               "{" "when" IDENT "enters" IDENT "->" IDENT IDENT
-              [ "when" guard_expr ] [ "{" "}" ] "}"
+              [ "when" guard_expr ] [ "with" "{" ... "}" ] [ "{" "}" ] "}"
 
 guard_expr  = <verbatim expression; see Guard grammar below>
 ```
@@ -88,6 +89,10 @@ Notes:
   optional.
 - **Initial state** must be a member of the `states` list; `from`/`to` states
   must also belong to the list (`from` may be `*` for wildcard).
+- A **lifecycle hook** binds one or more action ids, comma-separated
+  (`on_transition: x, y, z`). They run in the order written. Declaring the same
+  phase twice in one block is an error.
+- A **reaction** may carry a static payload block (`with { ... }`); see below.
 
 ## Guard grammar
 
@@ -116,12 +121,14 @@ unchanged.
 |---------------------------------------------|------------------------------------------------------------|
 | `signal S { states: [...] initial: I }`     | `signals[]`: `id`, `states`, `initial_state`               |
 | `on E from A -> B { ... }`                  | `transitions[]`: `signal_id`, `event`, `from`, `to`, `actions` |
+| `on E from * -> B { ... }` (wildcard)       | expands to one `transitions[]` per source state (incl. `B -> B` self-loop) |
 | `on E ... when G` (transition guard)        | `transitions[].guard` (string, verbatim)                   |
-| lifecycle hook `on_exit: x`                 | `transitions[].actions.on_exit[]` (in declaration order)   |
-| lifecycle hook `on_transition: x`           | `transitions[].actions.on_transition[]`                    |
-| lifecycle hook `on_enter: x`                | `transitions[].actions.on_enter[]`                         |
+| lifecycle hook `on_exit: x, y`              | `transitions[].actions.on_exit[]` (in declaration order)   |
+| lifecycle hook `on_transition: x, y`        | `transitions[].actions.on_transition[]`                    |
+| lifecycle hook `on_enter: x, y`             | `transitions[].actions.on_enter[]`                         |
 | `reaction { when S enters ST -> T EV }`    | `reactions[]`: `from_signal`, `from_state`, `to_signal`, `event` |
 | `reaction { ... when G }` (reaction guard)  | `reactions[].guard` (string, verbatim; evaluated at cascade) |
+| `reaction { ... with { ... } }` (payload)   | `reactions[].payload` (JSON `Value`; the derived event's payload) |
 | (implicit)                                  | `version` = `"0.1"`                                        |
 
 Mapping rules:
@@ -170,6 +177,66 @@ reaction {
 Mapping: the guard lands verbatim in `reactions[].guard` and is evaluated by
 `engine::send_event_internal`.
 
+### Wildcard `from *` (M34)
+
+A transition's `from` may be the wildcard `*`:
+
+```ddl
+on reset from * -> closed {
+    on_transition: clear_fault_safely
+    on_enter: log_reset
+}
+```
+
+The compiler lowers it to one transition per source state, so an `N`-state
+signal yields `N` transitions `{closed,open,fault} -> closed` — including the
+`closed -> closed` self-loop. All arms share the same `event`/`to`/`actions`/
+`guard`. The engine matches on `t.from == signal.current || t.from == "*"`,
+so the self-loop is harmless and is, in fact, the proof that the wildcard
+matches the **current** state rather than acting as a no-op. This mirrors the
+JSON path (`transition.from == "*"` matches any current state at runtime) and
+lets a single DDL line replace the hand-expanded three-line form.
+
+### Multi-action lifecycle hooks (M34)
+
+Each lifecycle hook binds a comma-separated list of action ids, evaluated in
+the order written. The engine runs the phases in the fixed order
+`on_exit` → `on_transition` → `on_enter` and, within each phase, in the order
+declared (`schema::ActionBinding::all_actions`):
+
+```ddl
+on open from closed -> open {
+    on_transition: activate_motor, warm_up
+    on_enter: log_open
+}
+```
+
+Declaring the same phase twice in a single block is a compile-time error.
+
+### Reaction static payload (M34)
+
+A reaction may carry a static payload delivered as the **derived event's**
+payload to the target signal:
+
+```ddl
+reaction {
+    when order enters approved -> inventory allocate
+        when payload.auto == true
+        with { "auto": true, "skip_reserve": true }
+}
+```
+
+The `with { ... }` block is optional. The compiler parses it to a JSON value
+and stores it in `reactions[].payload`; a malformed block is a compile-time
+error. When the cascade fires, the engine delivers this payload to the target
+(e.g. `send_event("inventory", "allocate", Some({"auto":true,...}))`).
+
+Note the two payloads are distinct: the reaction's **guard** is evaluated
+against the *source* event's payload (the `send_event` that triggered the
+transition the reaction reacts to — the same rule as a transition guard), while
+the reaction's **static payload** (`with { ... }`) rides on the *derived* event
+to the target.
+
 ## Tool chain
 
 ```
@@ -191,7 +258,9 @@ order_approval.ddl ──stc──▶ order_approval.json ──▶ engine (sts/
 | `... initial state 'X' is not in the states list`                       | `initial:` not a member of `states`.           |
 | `... duplicate signal 'S'`                                              | Two `signal S` blocks.                         |
 | `... duplicate 'on_exit' hook`                                          | Same lifecycle phase declared twice in a block.|
+| `... 'from' state 'X' is not in the states list for 'S'` (for `from *`) | `*` is the only wildcard; other names must be in `states`. |
 | `line L col C: 'when' requires a guard expression`                      | Empty `when` with no expression.               |
+| `reaction payload is not valid JSON: ...`                               | The `with { ... }` block isn't valid JSON.    |
 | `Failed to compile '...': line L col C: unterminated string literal`    | A `'...'` string wasn't closed.                |
 
 All error messages carry `line`/`col` pointing at the offending token. The
