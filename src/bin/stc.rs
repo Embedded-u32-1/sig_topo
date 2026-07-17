@@ -123,6 +123,12 @@ fn schema_to_value(schema: &TopologySchema) -> Value {
                 );
                 m.insert("to_signal".to_string(), Value::String(r.to_signal.clone()));
                 m.insert("event".to_string(), Value::String(r.event.clone()));
+                // M38: a reaction may carry a guard (either written literally or
+                // expanded from a `guard <id>` template). Mirror the transition
+                // serializer and emit it only when present.
+                if let Some(guard) = &r.guard {
+                    m.insert("guard".to_string(), Value::String(guard.clone()));
+                }
                 Value::Object(m)
             })
             .collect::<Vec<_>>();

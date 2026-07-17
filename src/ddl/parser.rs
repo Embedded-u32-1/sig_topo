@@ -13,13 +13,15 @@ use super::lexer::Token;
 use super::TokenKind;
 
 /// A parsed DDL document: one signal declaration per `signal` block plus the
-/// cross-signal `reaction` blocks that follow.
+/// cross-signal `reaction` blocks and named `guard` declarations that follow.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DdlDoc {
     /// The declared signals, in source order.
     pub signals: Vec<SignalDecl>,
     /// The declared reactions, in source order.
     pub reactions: Vec<ReactionDecl>,
+    /// The top-level guard declarations, in source order.
+    pub guards: Vec<GuardDecl>,
 }
 
 /// A single `signal` declaration: its id, state space, initial state and the
@@ -91,6 +93,40 @@ pub struct ReactionDecl {
     pub payload: Option<String>,
 }
 
+/// A top-level `guard <id> { <expr> }` declaration: a named guard expression
+/// that reactions may reference via `when <id>`. Declared at the top level,
+/// alongside `signal` and `reaction`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuardDecl {
+    /// The guard's unique id.
+    pub id: String,
+    /// The guard expression text (verbatim, captured from inside the `{ }`).
+    pub expr: String,
+}
+
+/// The unresolved form of a reaction parsed from source: its guard is a
+/// `RawGuard` instead of the final `Option<String>`, so `parse_doc` can
+/// resolve id references against all top-level guard decls.
+#[derive(Debug, Clone, PartialEq)]
+struct RawReaction {
+    from_signal: String,
+    from_state: String,
+    to_signal: String,
+    event: String,
+    guard: Option<RawGuard>,
+    payload: Option<String>,
+}
+
+/// A reaction guard as written in source: either a literal expression or a
+/// reference to a top-level guard declaration by id.
+#[derive(Debug, Clone, PartialEq)]
+enum RawGuard {
+    /// A literal guard expression (verbatim source text).
+    Lit(String),
+    /// A reference to a top-level `guard <id>` declaration.
+    Ref(String),
+}
+
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
@@ -157,25 +193,67 @@ impl<'a> Parser<'a> {
 
     fn parse_doc(&mut self) -> Result<DdlDoc, String> {
         let mut signals = Vec::new();
-        let mut reactions = Vec::new();
+        let mut raw_reactions = Vec::new();
+        let mut guards = Vec::new();
 
         let mut seen_signals = std::collections::HashSet::new();
+        let mut seen_guard_ids = std::collections::HashSet::new();
 
         while !self.at_end() {
             match self.peek().kind {
                 TokenKind::Signal => signals.push(self.parse_signal(&mut seen_signals)?),
-                TokenKind::Reaction => reactions.push(self.parse_reaction()?),
+                TokenKind::Reaction => raw_reactions.push(self.parse_reaction_raw()?),
+                TokenKind::Guard => guards.push(self.parse_guard_decl(&mut seen_guard_ids)?),
                 _ => {
                     let t = self.peek();
                     return Err(format!(
-                        "line {} col {}: expected 'signal' or 'reaction', found {:?}",
+                        "line {} col {}: expected 'signal', 'reaction' or 'guard', found {:?}",
                         t.line, t.col, t.kind
                     ));
                 }
             }
         }
 
-        Ok(DdlDoc { signals, reactions })
+        // Resolve guard references. A reaction written as `when <id>` picks up
+        // the named top-level guard's expression verbatim; this two-pass lets a
+        // reaction reference a guard declared later in the source. A reference
+        // to an unknown id is a parse error.
+        let guard_map: std::collections::HashMap<String, String> = guards
+            .iter()
+            .map(|g| (g.id.clone(), g.expr.clone()))
+            .collect();
+        let reactions = raw_reactions
+            .into_iter()
+            .map(|r| {
+                let guard = match r.guard {
+                    None => None,
+                    Some(RawGuard::Lit(s)) => Some(s),
+                    Some(RawGuard::Ref(id)) => Some(
+                        guard_map
+                            .get(&id)
+                            .cloned()
+                            .ok_or_else(|| format!(
+                                "undefined guard '{}' referenced in reaction ({} enters {})",
+                                id, r.from_signal, r.from_state
+                            ))?,
+                    ),
+                };
+                Ok(ReactionDecl {
+                    from_signal: r.from_signal,
+                    from_state: r.from_state,
+                    to_signal: r.to_signal,
+                    event: r.event,
+                    guard,
+                    payload: r.payload,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        Ok(DdlDoc {
+            signals,
+            reactions,
+            guards,
+        })
     }
 
     fn parse_signal(&mut self, seen: &mut std::collections::HashSet<String>) -> Result<SignalDecl, String> {
@@ -412,7 +490,7 @@ impl<'a> Parser<'a> {
         Ok(actions)
     }
 
-    fn parse_reaction(&mut self) -> Result<ReactionDecl, String> {
+    fn parse_reaction_raw(&mut self) -> Result<RawReaction, String> {
         self.expect_keyword(TokenKind::Reaction)?;
         self.expect_keyword(TokenKind::LBrace)?;
 
@@ -428,9 +506,10 @@ impl<'a> Parser<'a> {
 
         let (event, _) = self.expect_any_ident()?;
 
-        // Optional `when <guard>`.
+        // Optional `when <guard>`. The guard is either a bare identifier (a
+        // reference to a top-level guard declaration) or a literal expression.
         let guard = if matches!(self.peek().kind, TokenKind::When) {
-            Some(self.parse_guard()?)
+            Some(self.parse_guard_spec()?)
         } else {
             None
         };
@@ -450,7 +529,7 @@ impl<'a> Parser<'a> {
 
         self.expect_keyword(TokenKind::RBrace)?;
 
-        Ok(ReactionDecl {
+        Ok(RawReaction {
             from_signal,
             from_state,
             to_signal,
@@ -458,6 +537,85 @@ impl<'a> Parser<'a> {
             guard,
             payload,
         })
+    }
+
+    /// Parse a top-level `guard <id> { <expr> }` declaration. The expression
+    /// is captured verbatim from inside the `{ }` (nested braces are tracked by
+    /// `parse_raw_brace_block`).
+    fn parse_guard_decl(
+        &mut self,
+        seen: &mut std::collections::HashSet<String>,
+    ) -> Result<GuardDecl, String> {
+        self.expect_keyword(TokenKind::Guard)?;
+
+        let (id, id_tok) = self.expect_any_ident()?;
+        if !seen.insert(id.clone()) {
+            return Err(format!(
+                "line {} col {}: duplicate guard '{}'",
+                id_tok.line, id_tok.col, id
+            ));
+        }
+
+        let raw = self.parse_raw_brace_block()?;
+        // Strip the surrounding `{ }` and trim the inner expression text.
+        let expr = raw
+            .strip_prefix('{')
+            .and_then(|s| s.strip_suffix('}'))
+            .unwrap_or(&raw)
+            .trim()
+            .to_string();
+
+        Ok(GuardDecl { id, expr })
+    }
+
+    /// Classify a reaction's `when` clause as either a literal guard
+    /// expression or a guard-id reference. A bare identifier (a single IDENT
+    /// token before the terminator) is treated as a reference; anything else
+    /// (compound expression, literal, etc.) is a literal. Reference resolution
+    /// happens in `parse_doc` once all guard decls are known, so forward
+    /// references are supported.
+    fn parse_guard_spec(&mut self) -> Result<RawGuard, String> {
+        self.expect_keyword(TokenKind::When)?;
+
+        let first_tok = self.peek();
+        match first_tok.kind {
+            TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof | TokenKind::With => {
+                return Err(format!(
+                    "line {} col {}: 'when' requires a guard expression",
+                    first_tok.line, first_tok.col
+                ));
+            }
+            _ => {}
+        }
+
+        // A guard reference is exactly one IDENT token followed by a terminator
+        // (`{`, `}`, `with`, eof). Record whether that single token is an
+        // IDENT, then slice the verbatim text either way.
+        let start_idx = self.pos;
+        let mut end_idx = self.pos;
+        loop {
+            match self.peek().kind {
+                TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof | TokenKind::With => break,
+                _ => {
+                    end_idx = self.pos;
+                    self.advance();
+                }
+            }
+        }
+
+        let single_ident = end_idx == start_idx
+            && matches!(self.tokens[start_idx].kind, TokenKind::Identifier(_));
+
+        let first = &self.tokens[start_idx];
+        let last = &self.tokens[end_idx];
+        let slice = &self.src[first.start..last.start + last.len];
+        let text = slice.trim().to_string();
+
+        if single_ident {
+            Ok(RawGuard::Ref(text))
+        } else {
+            Ok(RawGuard::Lit(text))
+        }
     }
 
     /// Consume a `{ ... }` block (the leading `{` is the current token) and
@@ -640,7 +798,11 @@ signal s {
     fn unknown_top_level_keyword_reports_location() {
         let err = src_to_doc("bogus {}").unwrap_err();
         assert!(err.contains("line 1"), "got: {}", err);
-        assert!(err.contains("expected 'signal' or 'reaction'"), "got: {}", err);
+        assert!(
+            err.contains("expected 'signal', 'reaction' or 'guard'"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -816,5 +978,157 @@ signal s {
         )
         .unwrap_err();
         assert!(err.contains("requires a guard expression"), "got: {}", err);
+    }
+
+    // --- guard template / reference (M38) ---
+
+    #[test]
+    fn parse_guard_decl_simple() {
+        let doc = src_to_doc(
+            r#"
+guard allow_alloc {
+    payload.auto == true
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(doc.guards.len(), 1);
+        assert_eq!(doc.guards[0].id, "allow_alloc");
+        assert_eq!(doc.guards[0].expr, "payload.auto == true");
+    }
+
+    #[test]
+    fn parse_guard_decl_nested_braces_in_expr() {
+        // A guard expression whose JSON-like text nests `{ }`; the inner braces
+        // must not be mistaken for the closing brace of the guard block.
+        let doc = src_to_doc(
+            r#"
+guard complex {
+    payload.auto == true and payload.cfg.deep == 1
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(doc.guards[0].id, "complex");
+        assert_eq!(
+            doc.guards[0].expr,
+            "payload.auto == true and payload.cfg.deep == 1"
+        );
+    }
+
+    #[test]
+    fn parse_reaction_guard_ref() {
+        let doc = src_to_doc(
+            r#"
+guard allow_alloc {
+    payload.auto == true
+}
+
+reaction {
+    when order enters approved -> inventory allocate when allow_alloc
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(doc.guards.len(), 1);
+        let r = &doc.reactions[0];
+        // The ref is expanded verbatim into the reaction's guard text.
+        assert_eq!(r.guard, Some("payload.auto == true".to_string()));
+    }
+
+    #[test]
+    fn parse_reaction_literal_guard_still_works() {
+        let doc = src_to_doc(
+            r#"
+reaction {
+    when order enters approved -> inventory allocate when payload.auto == true
+}
+"#,
+        )
+        .unwrap();
+
+        let r = &doc.reactions[0];
+        assert_eq!(r.guard, Some("payload.auto == true".to_string()));
+    }
+
+    #[test]
+    fn parse_guard_ref_expands_equal_to_literal() {
+        // A reaction that references a guard must end up with the same guard
+        // text as one that writes the expression literally.
+        let by_ref = src_to_doc(
+            r#"
+guard g {
+    payload.x > 0 and payload.y < 100
+}
+reaction {
+    when a enters b -> c d when g
+}
+"#,
+        )
+        .unwrap();
+        let by_lit = src_to_doc(
+            r#"
+reaction {
+    when a enters b -> c d when payload.x > 0 and payload.y < 100
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(by_ref.reactions[0].guard, by_lit.reactions[0].guard);
+    }
+
+    #[test]
+    fn parse_guard_ref_supports_forward_reference() {
+        // The reaction appears before the guard declaration, yet resolves.
+        let doc = src_to_doc(
+            r#"
+reaction {
+    when a enters b -> c d when g
+}
+guard g {
+    payload.ok == true
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(doc.reactions[0].guard, Some("payload.ok == true".to_string()));
+    }
+
+    #[test]
+    fn parse_guard_ref_to_undefined_is_error() {
+        let err = src_to_doc(
+            r#"
+reaction {
+    when a enters b -> c d when no_such_guard
+}
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("undefined guard 'no_such_guard'"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parse_duplicate_guard_id_is_error() {
+        let err = src_to_doc(
+            r#"
+guard g {
+    payload.a
+}
+guard g {
+    payload.b
+}
+"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("duplicate guard 'g'"), "got: {}", err);
     }
 }

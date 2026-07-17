@@ -188,6 +188,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
                 "on_exit" => TokenKind::OnExit,
                 "on_transition" => TokenKind::OnTransition,
                 "on_enter" => TokenKind::OnEnter,
+                "guard" => TokenKind::Guard,
                 "and" => TokenKind::And,
                 "or" => TokenKind::Or,
                 "not" => TokenKind::Not,
@@ -305,7 +306,7 @@ mod tests {
 
     #[test]
     fn keywords_are_recognized() {
-        let toks = tokenize("signal states initial on from to when reaction enters on_exit on_transition on_enter and or not true false").unwrap();
+        let toks = tokenize("signal states initial on from to when reaction enters on_exit on_transition on_enter guard and or not true false").unwrap();
         let kinds: Vec<_> = toks.iter().map(|t| &t.kind).collect();
         assert!(matches!(kinds[0], TokenKind::Signal));
         assert!(matches!(kinds[1], TokenKind::States));
@@ -319,12 +320,13 @@ mod tests {
         assert!(matches!(kinds[9], TokenKind::OnExit));
         assert!(matches!(kinds[10], TokenKind::OnTransition));
         assert!(matches!(kinds[11], TokenKind::OnEnter));
-        assert!(matches!(kinds[12], TokenKind::And));
-        assert!(matches!(kinds[13], TokenKind::Or));
-        assert!(matches!(kinds[14], TokenKind::Not));
-        assert!(matches!(kinds[15], TokenKind::Bool(true)));
-        assert!(matches!(kinds[16], TokenKind::Bool(false)));
-        assert!(matches!(kinds[17], TokenKind::Eof));
+        assert!(matches!(kinds[12], TokenKind::Guard));
+        assert!(matches!(kinds[13], TokenKind::And));
+        assert!(matches!(kinds[14], TokenKind::Or));
+        assert!(matches!(kinds[15], TokenKind::Not));
+        assert!(matches!(kinds[16], TokenKind::Bool(true)));
+        assert!(matches!(kinds[17], TokenKind::Bool(false)));
+        assert!(matches!(kinds[18], TokenKind::Eof));
     }
 
     #[test]

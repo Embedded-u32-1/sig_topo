@@ -208,6 +208,27 @@ pub fn format_trace(event: &TraceEvent) -> String {
             to,
             timestamp_ms,
         } => format!("[{}] Rollbacked {}: {} -> {}", timestamp_ms, signal_id, from, to),
+        TraceEvent::ReactionGuardEvaluated {
+            // `signal_id` mirrors `reaction_from_signal`; only the latter is
+            // used for the human-readable line.
+            signal_id: _,
+            reaction_from_signal,
+            reaction_from_state,
+            reaction_to_signal,
+            reaction_event,
+            guard,
+            result,
+            timestamp_ms,
+        } => format!(
+            "[{}] ReactionGuardEvaluated {}.{} -> {}.{} guard=`{}` result={}",
+            timestamp_ms,
+            reaction_from_signal,
+            reaction_from_state,
+            reaction_to_signal,
+            reaction_event,
+            guard,
+            result
+        ),
     }
 }
 

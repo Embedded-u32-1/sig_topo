@@ -52,6 +52,26 @@ pub enum TraceEvent {
         to: String,
         timestamp_ms: u64,
     },
+    /// A reaction guard was evaluated during cascade dispatch (M38). Emitted
+    /// for every reaction once its guard is resolved, so a trace consumer can
+    /// see *why* a reaction fired (`"true"`), was skipped (`"false"`), or was
+    /// skipped because the guard failed to evaluate (`"error: <msg>"`).
+    ReactionGuardEvaluated {
+        signal_id: String,
+        /// The `from_signal` of the reaction being dispatched.
+        reaction_from_signal: String,
+        /// The `from_state` of the reaction being dispatched.
+        reaction_from_state: String,
+        /// The `to_signal` of the reaction being dispatched.
+        reaction_to_signal: String,
+        /// The `event` the reaction would deliver.
+        reaction_event: String,
+        /// The guard expression that was evaluated.
+        guard: String,
+        /// `"true"`, `"false"`, or `"error: <msg>"`.
+        result: String,
+        timestamp_ms: u64,
+    },
 }
 
 impl TraceEvent {
@@ -64,6 +84,7 @@ impl TraceEvent {
             TraceEvent::ActionFailed { signal_id, .. } => signal_id,
             TraceEvent::StateChanged { signal_id, .. } => signal_id,
             TraceEvent::Rollbacked { signal_id, .. } => signal_id,
+            TraceEvent::ReactionGuardEvaluated { signal_id, .. } => signal_id,
         }
     }
 
@@ -76,6 +97,7 @@ impl TraceEvent {
             TraceEvent::ActionFailed { timestamp_ms, .. } => *timestamp_ms,
             TraceEvent::StateChanged { timestamp_ms, .. } => *timestamp_ms,
             TraceEvent::Rollbacked { timestamp_ms, .. } => *timestamp_ms,
+            TraceEvent::ReactionGuardEvaluated { timestamp_ms, .. } => *timestamp_ms,
         }
     }
 }

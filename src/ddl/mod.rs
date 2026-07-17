@@ -47,6 +47,7 @@ pub enum TokenKind {
     OnExit,
     OnTransition,
     OnEnter,
+    Guard,
 
     // Guard expression keywords.
     And,

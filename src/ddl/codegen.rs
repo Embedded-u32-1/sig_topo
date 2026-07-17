@@ -148,6 +148,7 @@ mod tests {
                 ],
             }],
             reactions: vec![],
+            guards: vec![],
         }
     }
 
@@ -199,6 +200,7 @@ mod tests {
                 guard: None,
                 payload: None,
             }],
+            guards: vec![],
         })
         .unwrap();
 
@@ -225,6 +227,7 @@ mod tests {
                 guard: Some("payload.auto".to_string()),
                 payload: None,
             }],
+            guards: vec![],
         })
         .unwrap();
 
@@ -246,6 +249,7 @@ mod tests {
                 guard: None,
                 payload: Some(r#"{ "auto": true, "count": 1 }"#.to_string()),
             }],
+            guards: vec![],
         })
         .unwrap();
 
@@ -270,6 +274,7 @@ mod tests {
                 guard: None,
                 payload: Some(r#"{ not json }"#.to_string()),
             }],
+            guards: vec![],
         })
         .unwrap_err();
         assert!(err.to_string().contains("not valid JSON"), "got: {}", err);

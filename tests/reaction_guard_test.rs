@@ -302,3 +302,270 @@ fn reaction_guard_false_returns_ok_not_err() {
         result
     );
 }
+
+// ---------------------------------------------------------------------------
+// M38 part B: every reaction guard evaluation is recorded in the trace as a
+// `ReactionGuardEvaluated` event, with result "true" / "false" / "error: ...".
+// ---------------------------------------------------------------------------
+
+/// Collect the `ReactionGuardEvaluated` events from an engine's trace.
+fn guard_eval_events(engine: &TopologyEngine) -> Vec<TraceEvent> {
+    engine
+        .traces()
+        .iter()
+        .filter(|e| matches!(e, TraceEvent::ReactionGuardEvaluated { .. }))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn reaction_guard_evaluated_true_is_traced() {
+    let json = r#"{
+        "version": "0.1",
+        "signals": [
+            {"id": "A", "initial_state": "a0", "states": ["a0", "a1"]},
+            {"id": "B", "initial_state": "b0", "states": ["b0", "b1"]}
+        ],
+        "transitions": [
+            {"signal_id": "A", "from": "a0", "event": "go", "to": "a1"},
+            {"signal_id": "B", "from": "b0", "event": "react", "to": "b1"}
+        ],
+        "reactions": [
+            {
+                "from_signal": "A", "from_state": "a1",
+                "to_signal": "B", "event": "react",
+                "guard": "payload.enable == true"
+            }
+        ]
+    }"#;
+
+    let mut engine = engine_from_json(json);
+    engine
+        .send_event("A", "go", Some(serde_json::json!({"enable": true})))
+        .unwrap();
+
+    let evals = guard_eval_events(&engine);
+    assert_eq!(evals.len(), 1, "a single guarded reaction yields one eval event");
+    match &evals[0] {
+        TraceEvent::ReactionGuardEvaluated {
+            reaction_from_signal,
+            reaction_from_state,
+            reaction_to_signal,
+            reaction_event,
+            guard,
+            result,
+            ..
+        } => {
+            assert_eq!(reaction_from_signal, "A");
+            assert_eq!(reaction_from_state, "a1");
+            assert_eq!(reaction_to_signal, "B");
+            assert_eq!(reaction_event, "react");
+            assert_eq!(guard, "payload.enable == true");
+            assert_eq!(result, "true");
+        }
+        other => panic!("expected ReactionGuardEvaluated, got {:?}", other),
+    }
+}
+
+#[test]
+fn reaction_guard_evaluated_false_is_traced() {
+    let json = r#"{
+        "version": "0.1",
+        "signals": [
+            {"id": "A", "initial_state": "a0", "states": ["a0", "a1"]},
+            {"id": "B", "initial_state": "b0", "states": ["b0", "b1"]}
+        ],
+        "transitions": [
+            {"signal_id": "A", "from": "a0", "event": "go", "to": "a1"},
+            {"signal_id": "B", "from": "b0", "event": "react", "to": "b1"}
+        ],
+        "reactions": [
+            {
+                "from_signal": "A", "from_state": "a1",
+                "to_signal": "B", "event": "react",
+                "guard": "payload.enable == true"
+            }
+        ]
+    }"#;
+
+    let mut engine = engine_from_json(json);
+    engine
+        .send_event("A", "go", Some(serde_json::json!({"enable": false})))
+        .unwrap();
+
+    let evals = guard_eval_events(&engine);
+    assert_eq!(evals.len(), 1);
+    match &evals[0] {
+        TraceEvent::ReactionGuardEvaluated { result, .. } => {
+            assert_eq!(result, "false", "guard=false must be recorded as \"false\"");
+        }
+        other => panic!("expected ReactionGuardEvaluated, got {:?}", other),
+    }
+
+    // The cascade was skipped: B stays at b0.
+    assert_eq!(engine.get_state("B").unwrap(), "b0");
+}
+
+#[test]
+fn reaction_guard_evaluated_error_is_traced() {
+    // `payload.x + "s"` adds an integer-shaped null to a string -> the Add
+    // arm errors ("Cannot perform arithmetic"). The guard evaluation must be
+    // recorded as "error: <msg>" and the reaction skipped.
+    let json = r#"{
+        "version": "0.1",
+        "signals": [
+            {"id": "A", "initial_state": "a0", "states": ["a0", "a1"]},
+            {"id": "B", "initial_state": "b0", "states": ["b0", "b1"]}
+        ],
+        "transitions": [
+            {"signal_id": "A", "from": "a0", "event": "go", "to": "a1"},
+            {"signal_id": "B", "from": "b0", "event": "react", "to": "b1"}
+        ],
+        "reactions": [
+            {
+                "from_signal": "A", "from_state": "a1",
+                "to_signal": "B", "event": "react",
+                "guard": "payload.x + \"s\""
+            }
+        ]
+    }"#;
+
+    let mut engine = engine_from_json(json);
+    // payload.x is absent -> Null; Null + "s" is an arithmetic error.
+    engine
+        .send_event("A", "go", Some(serde_json::json!({"x": null})))
+        .unwrap();
+
+    let evals = guard_eval_events(&engine);
+    assert_eq!(evals.len(), 1);
+    match &evals[0] {
+        TraceEvent::ReactionGuardEvaluated { result, .. } => {
+            assert!(
+                result.starts_with("error:"),
+                "expected \"error: ...\", got {:?}",
+                result
+            );
+        }
+        other => panic!("expected ReactionGuardEvaluated, got {:?}", other),
+    }
+
+    // Reaction skipped on eval error, main transition still commits.
+    assert_eq!(engine.get_state("A").unwrap(), "a1");
+    assert_eq!(engine.get_state("B").unwrap(), "b0");
+}
+
+// ---------------------------------------------------------------------------
+// M38 part A end-to-end: two reactions sharing one guard id behave identically
+// and expand to the same guard text.
+// ---------------------------------------------------------------------------
+use signal_topology::ddl::compile;
+
+#[test]
+fn two_reactions_share_guard_id_behave_identically() {
+    let ddl = r#"
+guard allow_alloc {
+    payload.auto == true
+}
+
+signal order {
+    states: [pending, approved]
+    initial: pending
+    on approve from pending -> approved
+}
+signal inventory {
+    states: [idle, allocated]
+    initial: idle
+    on allocate from idle -> allocated
+}
+signal audit {
+    states: [idle, noted]
+    initial: idle
+    on note from idle -> noted
+}
+
+// Two reactions reference the same guard id.
+reaction {
+    when order enters approved -> inventory allocate when allow_alloc
+}
+reaction {
+    when order enters approved -> audit note when allow_alloc
+}
+"#;
+
+    let schema = compile(ddl).expect("ddl should compile");
+    let r0 = &schema.reactions[0];
+    let r1 = &schema.reactions[1];
+
+    // Both expanded to the identical guard text (the inlined expression).
+    assert_eq!(r0.guard, r1.guard);
+    assert_eq!(r0.guard, Some("payload.auto == true".to_string()));
+
+    let mut engine = TopologyEngine::from_schema(schema).unwrap();
+
+    // enable=true → both reactions fire.
+    engine
+        .send_event("order", "approve", Some(serde_json::json!({"auto": true})))
+        .unwrap();
+    assert_eq!(engine.get_state("inventory").unwrap(), "allocated");
+    assert_eq!(engine.get_state("audit").unwrap(), "noted");
+
+    let evals = guard_eval_events(&engine);
+    assert_eq!(evals.len(), 2, "two guarded reactions → two eval events");
+    for e in evals {
+        match e {
+            TraceEvent::ReactionGuardEvaluated { result, .. } => assert_eq!(result, "true"),
+            other => panic!("expected ReactionGuardEvaluated, got {:?}", other),
+        }
+    }
+}
+
+#[test]
+fn two_reactions_share_guard_id_skipped_when_false() {
+    let ddl = r#"
+guard allow_alloc {
+    payload.auto == true
+}
+
+signal order {
+    states: [pending, approved]
+    initial: pending
+    on approve from pending -> approved
+}
+signal inventory {
+    states: [idle, allocated]
+    initial: idle
+    on allocate from idle -> allocated
+}
+signal audit {
+    states: [idle, noted]
+    initial: idle
+    on note from idle -> noted
+}
+
+reaction {
+    when order enters approved -> inventory allocate when allow_alloc
+}
+reaction {
+    when order enters approved -> audit note when allow_alloc
+}
+"#;
+
+    let mut engine = TopologyEngine::from_schema(compile(ddl).unwrap()).unwrap();
+
+    // enable=false → both reactions skipped (shared guard), but order still commits.
+    engine
+        .send_event("order", "approve", Some(serde_json::json!({"auto": false})))
+        .unwrap();
+    assert_eq!(engine.get_state("order").unwrap(), "approved");
+    assert_eq!(engine.get_state("inventory").unwrap(), "idle");
+    assert_eq!(engine.get_state("audit").unwrap(), "idle");
+
+    let evals = guard_eval_events(&engine);
+    assert_eq!(evals.len(), 2);
+    for e in evals {
+        match e {
+            TraceEvent::ReactionGuardEvaluated { result, .. } => assert_eq!(result, "false"),
+            other => panic!("expected ReactionGuardEvaluated, got {:?}", other),
+        }
+    }
+}

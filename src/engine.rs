@@ -443,7 +443,26 @@ impl TopologyEngine {
                     event: reaction.event.clone(),
                     payload: parent_payload.clone(),
                 };
-                match eval_guard(guard_str, &guard_ctx) {
+                let guard_result = eval_guard(guard_str, &guard_ctx);
+                // M38: record the guard outcome (true / false / error) so the
+                // trace shows why this reaction fired or was skipped. The
+                // `result` string is "true", "false", or "error: <msg>".
+                let result_str = match &guard_result {
+                    Ok(true) => "true".to_string(),
+                    Ok(false) => "false".to_string(),
+                    Err(msg) => format!("error: {}", msg),
+                };
+                self.trace.push(TraceEvent::ReactionGuardEvaluated {
+                    signal_id: signal_id.to_string(),
+                    reaction_from_signal: reaction.from_signal.clone(),
+                    reaction_from_state: reaction.from_state.clone(),
+                    reaction_to_signal: reaction.to_signal.clone(),
+                    reaction_event: reaction.event.clone(),
+                    guard: guard_str.clone(),
+                    result: result_str,
+                    timestamp_ms: now_ms(),
+                });
+                match guard_result {
                     Ok(true) => {}
                     Ok(false) => continue,
                     Err(_) => continue,
@@ -648,6 +667,23 @@ fn trace_event_to_value(e: &TraceEvent) -> Value {
             obj.insert("kind".into(), Value::from("Rollbacked"));
             obj.insert("from".into(), Value::from(from.clone()));
             obj.insert("to".into(), Value::from(to.clone()));
+        }
+        TraceEvent::ReactionGuardEvaluated {
+            reaction_from_signal,
+            reaction_from_state,
+            reaction_to_signal,
+            reaction_event,
+            guard,
+            result,
+            ..
+        } => {
+            obj.insert("kind".into(), Value::from("ReactionGuardEvaluated"));
+            obj.insert("from_signal".into(), Value::from(reaction_from_signal.clone()));
+            obj.insert("from_state".into(), Value::from(reaction_from_state.clone()));
+            obj.insert("to_signal".into(), Value::from(reaction_to_signal.clone()));
+            obj.insert("event".into(), Value::from(reaction_event.clone()));
+            obj.insert("guard".into(), Value::from(guard.clone()));
+            obj.insert("result".into(), Value::from(result.clone()));
         }
     }
     v

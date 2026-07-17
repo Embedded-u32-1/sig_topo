@@ -73,6 +73,24 @@ This is configured in DDL as `reaction { when <sig> enters <state> -> <tgt> <ev>
 M32 defaulted the field to `None` (`#[serde(default)]`), so legacy topology
 files cascade unconditionally with no change.
 
+### Guard templates (M38)
+
+A guard can be written once and shared by many reactions via a top-level
+`guard <id> { <expr> }` declaration (see `doc/ddl.md`). A reaction references
+it with `when <id>`; the compiler inlines the expression verbatim into each
+referencing reaction, so every referencing reaction ends up with the identical
+guard text and behaves identically. Change the declaration and all referencing
+reactions follow — single-source-of-truth guard conditions. The schema layer
+(`ReactionDef.guard`) always holds the expanded expression, never a bare
+reference id.
+
+### Guard evaluation trace (M38)
+
+Each reaction guard evaluation now emits a `ReactionGuardEvaluated` trace event
+with a `result` of `"true"` (fired), `"false"` (skipped), or `"error: <msg>"`
+(skipped on eval failure). A shared guard therefore traces identical `result`
+values across its reactions, making the cascade decision observable.
+
 ## Cascade Depth Limit
 
 To prevent runaway recursion and stack overflow, the engine enforces a maximum cascade depth. The default limit is `8`. Use `TopologyEngine::set_max_cascade_depth` to configure it.

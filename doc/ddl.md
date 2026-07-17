@@ -55,7 +55,7 @@ reaction {
 ## Syntax reference (EBNF)
 
 ```
-doc         = { signal | reaction }
+doc         = { signal | reaction | guard }
 
 signal      = "signal" IDENT
               "{" states_decl initial_decl { transition } "}"
@@ -73,7 +73,10 @@ lifecycle   = ("on_exit" | "on_transition" | "on_enter")
 
 reaction    = "reaction"
               "{" "when" IDENT "enters" IDENT "->" IDENT IDENT
-              [ "when" guard_expr ] [ "with" "{" ... "}" ] [ "{" "}" ] "}"
+              [ "when" ( guard_expr | IDENT ) ]
+              [ "with" "{" ... "}" ] [ "{" "}" ] "}"
+
+guard       = "guard" IDENT "{" guard_expr "}"
 
 guard_expr  = <verbatim expression; see Guard grammar below>
 ```
@@ -93,6 +96,9 @@ Notes:
   (`on_transition: x, y, z`). They run in the order written. Declaring the same
   phase twice in one block is an error.
 - A **reaction** may carry a static payload block (`with { ... }`); see below.
+- A **reaction guard** (`when ...`) may be either a literal expression or a bare
+  identifier, which references a top-level `guard <id> { <expr> }` declaration
+  (see "Guard templates" below). Forward references are allowed.
 
 ## Guard grammar
 
@@ -128,7 +134,9 @@ unchanged.
 | lifecycle hook `on_enter: x, y`             | `transitions[].actions.on_enter[]`                         |
 | `reaction { when S enters ST -> T EV }`    | `reactions[]`: `from_signal`, `from_state`, `to_signal`, `event` |
 | `reaction { ... when G }` (reaction guard)  | `reactions[].guard` (string, verbatim; evaluated at cascade) |
+| `reaction { ... when ID }` (guard ref)      | `reactions[].guard` (the referenced guard's expr, inlined verbatim) |
 | `reaction { ... with { ... } }` (payload)   | `reactions[].payload` (JSON `Value`; the derived event's payload) |
+| `guard ID { G }` (M38)                      | no direct JSON field; inlined into each `reactions[].guard` that refs it |
 | (implicit)                                  | `version` = `"0.1"`                                        |
 
 Mapping rules:
@@ -176,6 +184,70 @@ reaction {
 
 Mapping: the guard lands verbatim in `reactions[].guard` and is evaluated by
 `engine::send_event_internal`.
+
+### Guard templates (M38)
+
+A guard expression can be written once and shared by many reactions via a
+top-level `guard <id> { <expr> }` declaration:
+
+```ddl
+guard allow_alloc {
+    payload.auto == true
+}
+
+signal order { states: [pending, approved] initial: pending on approve from pending -> approved }
+signal inventory { states: [idle, allocated] initial: idle on allocate from idle -> allocated }
+signal audit { states: [idle, noted] initial: idle on note from idle -> noted }
+
+reaction {
+    when order enters approved -> inventory allocate when allow_alloc
+}
+reaction {
+    when order enters approved -> audit note when allow_alloc
+}
+```
+
+`when allow_alloc` references the guard declaration by id. The compiler
+**inlines** the referenced expression verbatim into each referencing reaction's
+`reactions[].guard`, so both reactions above end up with the identical guard
+text `payload.auto == true` — exactly as if it had been written out twice. This
+gives single-source-of-truth guard conditions: change the declaration and every
+referencing reaction follows.
+
+Rules:
+
+- A bare identifier after `when` is a reference; anything else (compound
+  expression, literal, `payload.x`) is a literal guard. For example
+  `when payload.auto` is a literal expression, while `when allow_alloc` is a
+  reference.
+- Forward references are allowed — a reaction may reference a guard declared
+  later in the source.
+- A reference to an undeclared guard id is a parse error.
+- Duplicate guard ids are a parse error.
+- The schema layer (`ReactionDef.guard`) never sees a bare reference id; the
+  guard is always the expanded expression text, so the JSON/engine are
+  unchanged.
+
+The guard language already supports `and` / `or` / `not`, so compound conditions
+need no extra syntax — `payload.auto == true and payload.cfg.enabled == true`
+expresses composition directly.
+
+### Guard evaluation trace (M38)
+
+M29/M30 record actions and state changes, but until M38 a reaction guard was
+silent: a `false` or failed guard just skipped the reaction with no trace. Now
+every reaction guard evaluation emits a `ReactionGuardEvaluated` trace event:
+
+```
+[1784320531134] ReactionGuardEvaluated order.approved -> inventory.allocate guard=`payload.auto == true` result=true
+[1784320531135] ReactionGuardEvaluated order.approved -> audit.note guard=`payload.auto == true` result=false
+```
+
+Fields: the reaction's `from_signal.from_state -> to_signal.event`, the guard
+expression, and a `result` that is `"true"` (reaction fired), `"false"`
+(reaction skipped), or `"error: <msg>"` (guard failed to evaluate, reaction
+skipped). Together they answer "why did this reaction fire / not fire", and a
+shared guard shows identical `result` values across the reactions that share it.
 
 ### Wildcard `from *` (M34)
 
