@@ -139,4 +139,17 @@ pub struct ReactionDef {
     /// on the payload carried by the derived event.
     #[serde(default)]
     pub guard: Option<String>,
+    /// The fork group this reaction belongs to, if any. M44: reactions sharing
+    /// a `join_group` form a parallel group — they fire (each with its own
+    /// cascade) and the group is marked complete only once all its members have
+    /// fired. `None` means the reaction is not part of a fork group.
+    #[serde(default)]
+    pub join_group: Option<String>,
+    /// The fork groups this reaction waits on before it may fire. M44: a
+    /// reaction with a non-empty `requires` is a "join" — it is held back
+    /// until every group named here has completed, then unblocked and fired.
+    /// Empty (the default) means no dependency: the reaction fires as soon as
+    /// it is reached, same as the pre-M44 serial behavior.
+    #[serde(default)]
+    pub requires: Vec<String>,
 }

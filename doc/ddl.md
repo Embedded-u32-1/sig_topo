@@ -55,7 +55,7 @@ reaction {
 ## Syntax reference (EBNF)
 
 ```
-doc         = { signal | reaction | guard }
+doc         = { signal | reaction | guard | fork | join }
 
 signal      = "signal" IDENT
               "{" states_decl initial_decl { transition } "}"
@@ -77,6 +77,19 @@ reaction    = "reaction"
               [ "with" "{" ... "}" ] [ "{" "}" ] "}"
 
 guard       = "guard" IDENT "{" guard_expr "}"
+
+fork        = "fork" "{" { reaction_body } "}"
+
+join        = "join" IDENT "{" { reaction_body } "}"
+
+reaction_body = "when" IDENT "enters" IDENT "->" IDENT IDENT
+                [ "when" ( guard_expr | IDENT ) ]
+                [ "with" "{" ... "}" ]
+
+note: inside a `fork`/`join` block each `reaction_body` is a self-contained
+`when ... enters ... -> ...` clause (no wrapping `reaction { }`). The word
+`when` that begins a fresh clause is distinguished from a `when` guard by the
+`<ident> entres` shape — see "Fork / join (M44)".
 
 guard_expr  = <verbatim expression; see Guard grammar below>
 ```
@@ -136,6 +149,8 @@ unchanged.
 | `reaction { ... when G }` (reaction guard)  | `reactions[].guard` (string, verbatim; evaluated at cascade) |
 | `reaction { ... when ID }` (guard ref)      | `reactions[].guard` (the referenced guard's expr, inlined verbatim) |
 | `reaction { ... with { ... } }` (payload)   | `reactions[].payload` (JSON `Value`; the derived event's payload) |
+| `fork { ... }` (M44) block members          | `reactions[].join_group` = the block's auto name (`fork0`, `fork1`, …) |
+| `join <group> { ... }` (M44) block members  | `reactions[].requires` = `["<group>"]` |
 | `guard ID { G }` (M38)                      | no direct JSON field; inlined into each `reactions[].guard` that refs it |
 | (implicit)                                  | `version` = `"0.1"`                                        |
 
@@ -319,6 +334,51 @@ against the *source* event's payload (the `send_event` that triggered the
 transition the reaction reacts to — the same rule as a transition guard), while
 the reaction's **static payload** (`with { ... }`) rides on the *derived* event
 to the target.
+
+## Fork / join (M44)
+
+A single transition can fan out to several cross-signal reactions, and a later
+reaction can wait until a whole *group* of those has finished. `fork` declares
+the parallel group; `join` declares the reactions that wait for it:
+
+```ddl
+signal A { states: [a0, a1] initial: a0 on go from a0 -> a1 }
+signal B { states: [b0, b1] initial: b0 on react from b0 -> b1 }
+signal C { states: [c0, c1] initial: c0 on react from c0 -> c1 }
+signal D { states: [d0, d1] initial: d0 on react from d0 -> d1 }
+
+fork {
+    // Both fire when A enters a1 — in parallel, each with its own cascade.
+    when A enters a1 -> B react
+    when A enters a1 -> C react
+}
+// Held back until the fork group completes, then fires.
+join fork0 {
+    when A enters a1 -> D react
+}
+```
+
+Semantics:
+
+- `fork { ... }` assigns every reaction inside it the same `join_group` name,
+  auto-generated from source order: the first `fork` block is `fork0`, the
+  second `fork1`, and so on. All members fire (in source order, each running to
+  completion including its own sub-cascade, mirroring the existing per-signal
+  atomic rollback). The group is *complete* once every member has fired.
+- `join <group> { ... }` assigns each reaction inside it a `requires` on the
+  named group. Those reactions are held until the group completes, then fired.
+  A `join` may reference a `fork` declared either earlier or later in the
+  source (forward references are allowed, like guard references); a reference
+  to a group with no matching `fork` is a compile-time error.
+- A reaction with no `join_group` and empty `requires` behaves exactly like the
+  pre-M44 cascade — so existing topologies are unchanged.
+
+Each `fork`/`join` block may carry a `when <guard>` guard and/or a
+`with { ... }` static payload exactly like a standalone `reaction` block.
+
+The compiler lowers `fork`/`join` onto the `ReactionDef.join_group` and
+`ReactionDef.requires` fields. Because both fields are `#[serde(default)]`, the
+engine accepts topologies that omit them.
 
 ## Tool chain
 

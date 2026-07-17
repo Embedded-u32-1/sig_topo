@@ -64,6 +64,8 @@ fn notify_component() -> ComponentDef {
             event: "complete".to_string(),
             payload: None,
             guard: None,
+            join_group: None,
+            requires: Vec::new(),
         }],
     }
 }

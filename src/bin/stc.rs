@@ -136,6 +136,19 @@ fn schema_to_value(schema: &TopologySchema) -> Value {
                 if let Some(guard) = &r.guard {
                     m.insert("guard".to_string(), Value::String(guard.clone()));
                 }
+                // M44: fork/join fields. Emit only when set, mirroring the
+                // `#[serde(default)]` schema so legacy JSON stays unchanged.
+                if let Some(group) = &r.join_group {
+                    m.insert("join_group".to_string(), Value::String(group.clone()));
+                }
+                if !r.requires.is_empty() {
+                    m.insert(
+                        "requires".to_string(),
+                        Value::Array(
+                            r.requires.iter().map(|x| Value::String(x.clone())).collect(),
+                        ),
+                    );
+                }
                 Value::Object(m)
             })
             .collect::<Vec<_>>();

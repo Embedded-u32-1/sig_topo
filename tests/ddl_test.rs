@@ -5,7 +5,7 @@
 //! behaviour as the equivalent JSON fixtures. This pins down the "DDL is a
 //! front-end to the engine, engine layer untouched" contract.
 
-use signal_topology::{EngineError, TopologyEngine};
+use signal_topology::{EngineError, TopologyEngine, TraceEvent};
 use std::fs;
 
 /// Compile a DDL source string straight into a runnable engine.
@@ -392,3 +392,208 @@ signal dup {
         err
     );
 }
+
+// ---------------------------------------------------------------------------
+// M44: fork/join DDL syntax.
+// ---------------------------------------------------------------------------
+
+/// Collect the `StateChanged` events in trace order, as `(signal, to)`.
+fn state_changed(events: &[TraceEvent]) -> Vec<(String, String)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            TraceEvent::StateChanged { signal_id, to, .. } => {
+                Some((signal_id.clone(), to.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn fork_block_assigns_join_group_to_members() {
+    let ddl = r#"
+signal A {
+    states: [a0, a1]
+    initial: a0
+    on go from a0 -> a1
+}
+signal B {
+    states: [b0, b1]
+    initial: b0
+    on react from b0 -> b1
+}
+signal C {
+    states: [c0, c1]
+    initial: c0
+    on react from c0 -> c1
+}
+
+fork {
+    when A enters a1 -> B react
+    when A enters a1 -> C react
+}
+"#;
+
+    let schema = signal_topology::ddl::compile(ddl).expect("fork should compile");
+    assert_eq!(schema.reactions.len(), 2);
+    for r in &schema.reactions {
+        assert_eq!(
+            r.join_group,
+            Some("fork0".to_string()),
+            "fork members must share the auto-named group"
+        );
+        assert!(r.requires.is_empty(), "fork members have no requires");
+    }
+}
+
+#[test]
+fn join_block_sets_requires_on_members() {
+    let ddl = r#"
+signal A {
+    states: [a0, a1]
+    initial: a0
+    on go from a0 -> a1
+}
+signal B {
+    states: [b0, b1]
+    initial: b0
+    on react from b0 -> b1
+}
+signal C {
+    states: [c0, c1]
+    initial: c0
+    on react from c0 -> c1
+}
+signal D {
+    states: [d0, d1]
+    initial: d0
+    on react from d0 -> d1
+}
+
+fork {
+    when A enters a1 -> B react
+    when A enters a1 -> C react
+}
+join fork0 {
+    when A enters a1 -> D react
+}
+"#;
+
+    let schema = signal_topology::ddl::compile(ddl).expect("fork+join should compile");
+    assert_eq!(schema.reactions.len(), 3);
+    let d = schema
+        .reactions
+        .iter()
+        .find(|r| r.to_signal == "D")
+        .expect("D reaction must exist");
+    assert_eq!(d.requires, vec!["fork0".to_string()]);
+    assert!(d.join_group.is_none(), "join member belongs to no fork group");
+}
+
+#[test]
+fn join_references_undefined_fork_group_is_error() {
+    let ddl = r#"
+signal A {
+    states: [a0, a1]
+    initial: a0
+    on go from a0 -> a1
+}
+signal D {
+    states: [d0, d1]
+    initial: d0
+    on react from d0 -> d1
+}
+
+join no_such_group {
+    when A enters a1 -> D react
+}
+"#;
+
+    let err = signal_topology::ddl::compile(ddl).unwrap_err();
+    assert!(
+        err.to_string().contains("undefined fork group 'no_such_group'"),
+        "got: {}",
+        err
+    );
+}
+
+#[test]
+fn fork_join_end_to_end_join_waits_for_group() {
+    let ddl = r#"
+signal A {
+    states: [a0, a1]
+    initial: a0
+    on go from a0 -> a1
+}
+signal B {
+    states: [b0, b1]
+    initial: b0
+    on react from b0 -> b1
+}
+signal C {
+    states: [c0, c1]
+    initial: c0
+    on react from c0 -> c1
+}
+signal D {
+    states: [d0, d1]
+    initial: d0
+    on react from d0 -> d1
+}
+
+fork {
+    when A enters a1 -> B react
+    when A enters a1 -> C react
+}
+join fork0 {
+    when A enters a1 -> D react
+}
+"#;
+
+    let mut engine = engine_from_ddl(ddl);
+    engine.send_event("A", "go", None).expect("main transition commits");
+
+    assert_eq!(engine.get_state("A").unwrap(), "a1");
+    assert_eq!(engine.get_state("B").unwrap(), "b1");
+    assert_eq!(engine.get_state("C").unwrap(), "c1");
+    assert_eq!(engine.get_state("D").unwrap(), "d1");
+
+    // D fires only after both B and C have changed.
+    let changed = state_changed(engine.traces());
+    let pos = |sig: &str| changed.iter().position(|(s, _)| s == sig).unwrap();
+    assert!(pos("D") > pos("B"));
+    assert!(pos("D") > pos("C"));
+}
+
+#[test]
+fn fork_with_end_to_end_fires_members() {
+    let ddl = r#"
+signal A {
+    states: [a0, a1]
+    initial: a0
+    on go from a0 -> a1
+}
+signal B {
+    states: [b0, b1]
+    initial: b0
+    on react from b0 -> b1
+}
+signal C {
+    states: [c0, c1]
+    initial: c0
+    on react from c0 -> c1
+}
+
+fork {
+    when A enters a1 -> B react
+    when A enters a1 -> C react
+}
+"#;
+
+    let mut engine = engine_from_ddl(ddl);
+    engine.send_event("A", "go", None).expect("main transition commits");
+    assert_eq!(engine.get_state("B").unwrap(), "b1");
+    assert_eq!(engine.get_state("C").unwrap(), "c1");
+}
+

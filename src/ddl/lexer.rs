@@ -189,6 +189,8 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
                 "on_transition" => TokenKind::OnTransition,
                 "on_enter" => TokenKind::OnEnter,
                 "guard" => TokenKind::Guard,
+                "fork" => TokenKind::Fork,
+                "join" => TokenKind::Join,
                 "and" => TokenKind::And,
                 "or" => TokenKind::Or,
                 "not" => TokenKind::Not,

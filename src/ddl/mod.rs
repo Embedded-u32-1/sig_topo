@@ -55,6 +55,9 @@ pub enum TokenKind {
     OnTransition,
     OnEnter,
     Guard,
+    // M44: fork/join workflow blocks.
+    Fork,
+    Join,
 
     // Guard expression keywords.
     And,

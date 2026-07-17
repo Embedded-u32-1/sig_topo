@@ -231,6 +231,8 @@ fn expand_reaction(
         event: resolve(&reaction.event, name, component, bound)?,
         payload: reaction.payload.clone(),
         guard: reaction.guard.clone(),
+        join_group: reaction.join_group.clone(),
+        requires: reaction.requires.clone(),
     })
 }
 

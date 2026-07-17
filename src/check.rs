@@ -324,6 +324,8 @@ mod tests {
             guard: Some("payload.amount <= 100".to_string()),
             guard_ref: id.map(String::from),
             payload: None,
+            join_group: None,
+            requires: vec![],
         }
     }
 

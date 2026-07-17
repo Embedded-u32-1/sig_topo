@@ -3,7 +3,7 @@ use crate::guard::eval_guard;
 use crate::schema::{ReactionDef, SignalDef, TopologySchema, TransitionDef};
 use crate::trace::{now_ms, TraceEvent, TraceLog};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// The context passed to every action callback during a transition.
 ///
@@ -411,6 +411,14 @@ impl TopologyEngine {
             executed_actions,
         };
 
+        // Fire the reactions this transition triggers, respecting M44 fork/join
+        // semantics. Matching reactions are those whose (`from_signal`,
+        // `from_state`) pair the just-entered state (`result.to`) — the
+        // wildcard `*` from_state matches every state. Reactions are dispatched
+        // in topological order: those with no `requires` fire first; a reaction
+        // whose `requires` are all already-completed groups fires once those
+        // groups finish. For the common case (no `join_group` and empty
+        // `requires`) this is identical to the pre-M44 serial dispatch.
         let matching_reactions: Vec<ReactionDef> = self
             .reactions
             .iter()
@@ -421,67 +429,150 @@ impl TopologyEngine {
             .cloned()
             .collect();
 
-        for reaction in matching_reactions {
-            // A reaction guard gates the cascade. It is evaluated against the
-            // *source* event's payload (`parent_payload`) — the payload of the
-            // event that triggered the transition this reaction reacts to — so
-            // a reaction can be gated on the data that caused it. This mirrors
-            // how a transition guard reads its own event's payload. A guard
-            // that is false, or that fails to evaluate, skips *this* reaction
-            // only — it never rolls back the already-committed transition and
-            // never aborts the remaining reactions. This keeps a single bad
-            // guard from breaking the whole cascade chain (see M32).
-            if let Some(guard_str) = &reaction.guard {
-                let guard_ctx = ActionContext {
-                    signal_id: reaction.to_signal.clone(),
-                    from_state: reaction.from_state.clone(),
-                    to_state: self
-                        .signals
-                        .get(&reaction.to_signal)
-                        .map(|s| s.current.clone())
-                        .unwrap_or_default(),
-                    event: reaction.event.clone(),
-                    payload: parent_payload.clone(),
-                };
-                let guard_result = eval_guard(guard_str, &guard_ctx);
-                // M38: record the guard outcome (true / false / error) so the
-                // trace shows why this reaction fired or was skipped. The
-                // `result` string is "true", "false", or "error: <msg>".
-                let result_str = match &guard_result {
-                    Ok(true) => "true".to_string(),
-                    Ok(false) => "false".to_string(),
-                    Err(msg) => format!("error: {}", msg),
-                };
-                self.trace.push(TraceEvent::ReactionGuardEvaluated {
-                    signal_id: signal_id.to_string(),
-                    reaction_from_signal: reaction.from_signal.clone(),
-                    reaction_from_state: reaction.from_state.clone(),
-                    reaction_to_signal: reaction.to_signal.clone(),
-                    reaction_event: reaction.event.clone(),
-                    guard: guard_str.clone(),
-                    result: result_str,
-                    timestamp_ms: now_ms(),
-                });
-                match guard_result {
-                    Ok(true) => {}
-                    Ok(false) => continue,
-                    Err(_) => continue,
-                }
-            }
-
-            // The reaction's static payload becomes the derived event's payload
-            // (`payload`), and — being the event that drives the next level —
-            // also the `parent_payload` any deeper reaction reacts against.
-            self.send_event_internal(
-                &reaction.to_signal,
-                &reaction.event,
-                reaction.payload.clone(),
-                reaction.payload.clone(),
-                depth + 1,
-            )?;
-        }
+        self.dispatch_reactions(matching_reactions, &parent_payload, depth, signal_id)?;
 
         Ok(result)
+    }
+
+    /// Fire a single reaction: gate it by its guard (if any), recording the
+    // outcome to the trace (M38), then cascade. A guard that is false or fails
+    // to evaluate skips this reaction only — it never rolls back the
+    // already-committed transition nor aborts sibling reactions (see M32).
+    fn fire_one_reaction(
+        &mut self,
+        reaction: &ReactionDef,
+        parent_payload: &Option<Value>,
+        depth: usize,
+        transition_signal: &str,
+    ) -> Result<(), EngineError> {
+        if let Some(guard_str) = &reaction.guard {
+            let guard_ctx = ActionContext {
+                signal_id: reaction.to_signal.clone(),
+                from_state: reaction.from_state.clone(),
+                to_state: self
+                    .signals
+                    .get(&reaction.to_signal)
+                    .map(|s| s.current.clone())
+                    .unwrap_or_default(),
+                event: reaction.event.clone(),
+                payload: parent_payload.clone(),
+            };
+            let guard_result = eval_guard(guard_str, &guard_ctx);
+            // M38: record the guard outcome (true / false / error) so the trace
+            // shows why this reaction fired or was skipped. The `result` string
+            // is "true", "false", or "error: <msg>".
+            let result_str = match &guard_result {
+                Ok(true) => "true".to_string(),
+                Ok(false) => "false".to_string(),
+                Err(msg) => format!("error: {}", msg),
+            };
+            self.trace.push(TraceEvent::ReactionGuardEvaluated {
+                signal_id: transition_signal.to_string(),
+                reaction_from_signal: reaction.from_signal.clone(),
+                reaction_from_state: reaction.from_state.clone(),
+                reaction_to_signal: reaction.to_signal.clone(),
+                reaction_event: reaction.event.clone(),
+                guard: guard_str.clone(),
+                result: result_str,
+                timestamp_ms: now_ms(),
+            });
+            match guard_result {
+                Ok(true) => {}
+                Ok(false) => return Ok(()),
+                Err(_) => return Ok(()),
+            }
+        }
+
+        // The reaction's static payload becomes the derived event's payload
+        // (`payload`), and — being the event that drives the next level — also
+        // the `parent_payload` any deeper reaction reacts against. The cascade
+        // result is intentionally discarded: each reaction's derived transition
+        // records its own `StateChanged`/`Rollbacked` events in the trace.
+        self.send_event_internal(
+            &reaction.to_signal,
+            &reaction.event,
+            reaction.payload.clone(),
+            reaction.payload.clone(),
+            depth + 1,
+        )
+        .map(|_| ())
+    }
+
+    /// Dispatch a set of matching reactions with M44 fork/join scheduling.
+    ///
+    /// A reaction belongs to a fork group when its `join_group` is `Some(g)`;
+    /// the group `g` is *complete* once every matching reaction whose
+    /// `join_group` is `g` has fired (whether it cascaded or was guard-skipped).
+    /// A reaction with a non-empty `requires` is a "join": it is held until
+    /// every group it names has completed, then fired.
+    ///
+    /// The algorithm is Kahn-style: reactions with no dependencies start in the
+    /// ready queue; firing one may complete a group, which moves any now-satisfied
+    /// waiting reactions to the ready queue. Until M44 this was a plain serial
+    /// loop — and it still is for every reaction with empty `requires`, so the
+    /// legacy cascade contract is preserved exactly.
+    fn dispatch_reactions(
+        &mut self,
+        matched: Vec<ReactionDef>,
+        parent_payload: &Option<Value>,
+        depth: usize,
+        transition_signal: &str,
+    ) -> Result<(), EngineError> {
+        // How many matched reactions belong to each fork group. A group is
+        // complete once this many of its members have fired.
+        let mut group_total: HashMap<String, usize> = HashMap::new();
+        for r in &matched {
+            if let Some(g) = &r.join_group {
+                *group_total.entry(g.clone()).or_insert(0) += 1;
+            }
+        }
+
+        // Split into ready (no dependencies) and waiting (needs groups),
+        // preserving source order within each.
+        let mut ready: VecDeque<ReactionDef> = VecDeque::new();
+        let mut waiting: Vec<ReactionDef> = Vec::new();
+        for r in matched {
+            if r.requires.is_empty() {
+                ready.push_back(r);
+            } else {
+                waiting.push(r);
+            }
+        }
+
+        let mut group_done_count: HashMap<String, usize> = HashMap::new();
+        let mut groups_done: HashSet<String> = HashSet::new();
+
+        while let Some(reaction) = ready.pop_front() {
+            let group = reaction.join_group.clone();
+
+            // Fire the reaction. A guard-skip or a successful cascade both count
+            // as "fired" for group-completion purposes; a cascade failure
+            // propagates (the `?`) and aborts the dispatch, matching the
+            // pre-M44 error contract.
+            self.fire_one_reaction(&reaction, parent_payload, depth, transition_signal)?;
+
+            // Track fork-group progress. When the last member fires, the group
+            // completes and may unblock any waiting reactions whose `requires`
+            // are now all satisfied.
+            if let Some(g) = group {
+                let done = *group_done_count.entry(g.clone()).or_insert(0) + 1;
+                group_done_count.insert(g.clone(), done);
+                if group_total.get(&g).copied() == Some(done) {
+                    groups_done.insert(g.clone());
+                    let mut still_waiting = Vec::new();
+                    for w in waiting {
+                        if w.requires.iter().all(|req| groups_done.contains(req)) {
+                            ready.push_back(w);
+                        } else {
+                            still_waiting.push(w);
+                        }
+                    }
+                    waiting = still_waiting;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Return the current state of `signal_id`.

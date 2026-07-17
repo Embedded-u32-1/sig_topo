@@ -112,6 +112,8 @@ fn emit_reaction(r: super::parser::ReactionDecl) -> Result<ReactionDef, EngineEr
         event: r.event,
         payload,
         guard: r.guard,
+        join_group: r.join_group,
+        requires: r.requires,
     })
 }
 
@@ -200,6 +202,8 @@ mod tests {
                 guard: None,
                 guard_ref: None,
                 payload: None,
+                join_group: None,
+                requires: vec![],
             }],
             guards: vec![],
         })
@@ -228,6 +232,8 @@ mod tests {
                 guard: Some("payload.auto".to_string()),
                 guard_ref: None,
                 payload: None,
+                join_group: None,
+                requires: vec![],
             }],
             guards: vec![],
         })
@@ -251,6 +257,8 @@ mod tests {
                 guard: None,
                 guard_ref: None,
                 payload: Some(r#"{ "auto": true, "count": 1 }"#.to_string()),
+                join_group: None,
+                requires: vec![],
             }],
             guards: vec![],
         })
@@ -277,6 +285,8 @@ mod tests {
                 guard: None,
                 guard_ref: None,
                 payload: Some(r#"{ not json }"#.to_string()),
+                join_group: None,
+                requires: vec![],
             }],
             guards: vec![],
         })

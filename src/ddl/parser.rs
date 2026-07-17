@@ -98,6 +98,14 @@ pub struct ReactionDecl {
     /// The raw source text of an optional `with { ... }` static payload block,
     /// e.g. `{ "auto": true }`. `None` when the reaction carries no payload.
     pub payload: Option<String>,
+    /// M44: the fork group this reaction belongs to, if it was declared inside a
+    /// `fork <name> { ... }` block. `None` when the reaction is not part of a
+    /// fork group.
+    pub join_group: Option<String>,
+    /// M44: the fork groups this reaction waits on before firing, if it was
+    /// declared inside a `join <group> { ... }` block. Empty when the reaction
+    /// has no dependency (the pre-M44 default).
+    pub requires: Vec<String>,
 }
 
 /// A top-level `guard <id> { <expr> }` declaration: a named guard expression
@@ -122,6 +130,9 @@ struct RawReaction {
     event: String,
     guard: Option<RawGuard>,
     payload: Option<String>,
+    // M44: see `ReactionDecl` for semantics.
+    join_group: Option<String>,
+    requires: Vec<String>,
 }
 
 /// A reaction guard as written in source: either a literal expression or a
@@ -206,16 +217,50 @@ impl<'a> Parser<'a> {
         let mut seen_signals = std::collections::HashSet::new();
         let mut seen_guard_ids = std::collections::HashSet::new();
 
+        // M44: fork groups are auto-named (`fork0`, `fork1`, ...) in source
+        // order. Track the names we define and the ones `join` references so we
+        // can validate every join targets a real fork group after the sweep.
+        let mut fork_counter: usize = 0;
+        let mut fork_groups = std::collections::HashSet::new();
+        let mut join_group_refs = Vec::new();
+
         while !self.at_end() {
             match self.peek().kind {
                 TokenKind::Signal => signals.push(self.parse_signal(&mut seen_signals)?),
                 TokenKind::Reaction => raw_reactions.push(self.parse_reaction_raw()?),
                 TokenKind::Guard => guards.push(self.parse_guard_decl(&mut seen_guard_ids)?),
+                TokenKind::Fork => {
+                    let block = self.parse_fork_block(&mut fork_counter)?;
+                    // The block's members all share the group name assigned by
+                    // `parse_fork_block`: `fork<fork_counter - 1>`.
+                    fork_groups.insert(format!("fork{}", fork_counter - 1));
+                    raw_reactions.extend(block);
+                }
+                TokenKind::Join => {
+                    let block = self.parse_join_block(&mut join_group_refs)?;
+                    raw_reactions.extend(block);
+                }
                 _ => {
                     let t = self.peek();
                     return Err(format!(
-                        "line {} col {}: expected 'signal', 'reaction' or 'guard', found {:?}",
+                        "line {} col {}: expected 'signal', 'reaction', 'guard', 'fork' or 'join', found {:?}",
                         t.line, t.col, t.kind
+                    ));
+                }
+            }
+        }
+
+        // M44: every `join <group>` must reference a fork group that exists.
+        if !join_group_refs.is_empty() {
+            let mut known_groups: Vec<String> =
+                fork_groups.iter().map(|s| s.to_string()).collect();
+            known_groups.sort();
+            for group in &join_group_refs {
+                if !fork_groups.contains(group) {
+                    return Err(format!(
+                        "join references undefined fork group '{}' (available groups: {})",
+                        group,
+                        known_groups.join(", ")
                     ));
                 }
             }
@@ -256,6 +301,8 @@ impl<'a> Parser<'a> {
                     guard,
                     guard_ref,
                     payload: r.payload,
+                    join_group: r.join_group,
+                    requires: r.requires,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -504,7 +551,27 @@ impl<'a> Parser<'a> {
     fn parse_reaction_raw(&mut self) -> Result<RawReaction, String> {
         self.expect_keyword(TokenKind::Reaction)?;
         self.expect_keyword(TokenKind::LBrace)?;
+        let reaction = self.parse_reaction_body()?;
+        self.expect_keyword(TokenKind::RBrace)?;
+        Ok(reaction)
+    }
 
+    /// A `when` at the current position introduces the *next* reaction (the
+    /// `when <sig> enters ...` shape) rather than a guard on the current one
+    /// exactly when it is followed by `<ident> entres`. Distinguishing the two
+    /// keeps a guard `when` from swallowing the next reaction in `fork`/`join
+    ///     blocks. Returns `true` only when the shape matches a reaction head.
+    fn at_reaction_head(&self) -> bool {
+        matches!(self.peek().kind, TokenKind::When)
+            && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Identifier(_)))
+            && matches!(self.tokens.get(self.pos + 2).map(|t| &t.kind), Some(TokenKind::Enters))
+    }
+
+    /// Parse a single reaction body starting at `when`: `when <sig> enters
+    /// <st> -> <tgt> <ev> [when <guard>] [with { ... } | { }]`. Used by the
+    /// `reaction`, `fork` and `join` blocks. The terminator (`}`, `when`, or
+    /// EOF) is left unconsumed so the caller can react to it.
+    fn parse_reaction_body(&mut self) -> Result<RawReaction, String> {
         self.expect_keyword(TokenKind::When)?;
         let (from_signal, _) = self.expect_any_ident()?;
 
@@ -517,9 +584,12 @@ impl<'a> Parser<'a> {
 
         let (event, _) = self.expect_any_ident()?;
 
-        // Optional `when <guard>`. The guard is either a bare identifier (a
-        // reference to a top-level guard declaration) or a literal expression.
-        let guard = if matches!(self.peek().kind, TokenKind::When) {
+        // Optional `when <guard>`. A bare `when` here is a guard only when it is
+        // *not* the head of the next reaction (the `fork`/`join` case where
+        // several reactions are listed back-to-back). The guard is either a
+        // bare identifier (a reference to a top-level guard declaration) or a
+        // literal expression.
+        let guard = if matches!(self.peek().kind, TokenKind::When) && !self.at_reaction_head() {
             Some(self.parse_guard_spec()?)
         } else {
             None
@@ -538,8 +608,6 @@ impl<'a> Parser<'a> {
             None
         };
 
-        self.expect_keyword(TokenKind::RBrace)?;
-
         Ok(RawReaction {
             from_signal,
             from_state,
@@ -547,7 +615,53 @@ impl<'a> Parser<'a> {
             event,
             guard,
             payload,
+            join_group: None,
+            requires: Vec::new(),
         })
+    }
+
+    /// Parse a top-level `fork { ... }` block. Its reactions form a parallel
+    /// group: each is tagged with the same auto-generated group name (`fork0`,
+    /// `fork1`, ... in source order) so the engine fires them as a fork and a
+    /// later `join` can wait for the group to complete.
+    fn parse_fork_block(
+        &mut self,
+        fork_counter: &mut usize,
+    ) -> Result<Vec<RawReaction>, String> {
+        self.expect_keyword(TokenKind::Fork)?;
+        self.expect_keyword(TokenKind::LBrace)?;
+        let group = format!("fork{}", fork_counter);
+        *fork_counter += 1;
+        let mut reactions = Vec::new();
+        while matches!(self.peek().kind, TokenKind::When) {
+            let mut r = self.parse_reaction_body()?;
+            r.join_group = Some(group.clone());
+            reactions.push(r);
+        }
+        self.expect_keyword(TokenKind::RBrace)?;
+        Ok(reactions)
+    }
+
+    /// Parse a top-level `join <group> { ... }` block. Its reactions are held
+    /// back until the named fork group completes, then fired — marking a join
+    /// point in the workflow. The referenced group name is recorded in
+    /// `group_refs` so `parse_doc` can validate it against the fork groups.
+    fn parse_join_block(
+        &mut self,
+        group_refs: &mut Vec<String>,
+    ) -> Result<Vec<RawReaction>, String> {
+        self.expect_keyword(TokenKind::Join)?;
+        let (group, _) = self.expect_any_ident()?;
+        self.expect_keyword(TokenKind::LBrace)?;
+        let mut reactions = Vec::new();
+        while matches!(self.peek().kind, TokenKind::When) {
+            let mut r = self.parse_reaction_body()?;
+            r.requires = vec![group.clone()];
+            reactions.push(r);
+        }
+        group_refs.push(group);
+        self.expect_keyword(TokenKind::RBrace)?;
+        Ok(reactions)
     }
 
     /// Parse a top-level `guard <id> { <expr> }` declaration. The expression
@@ -810,7 +924,7 @@ signal s {
         let err = src_to_doc("bogus {}").unwrap_err();
         assert!(err.contains("line 1"), "got: {}", err);
         assert!(
-            err.contains("expected 'signal', 'reaction' or 'guard'"),
+            err.contains("expected 'signal', 'reaction', 'guard', 'fork' or 'join'"),
             "got: {}",
             err
         );

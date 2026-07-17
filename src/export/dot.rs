@@ -403,6 +403,8 @@ mod tests {
                     event: "allocate".to_string(),
                     payload: None,
                     guard: None,
+                    join_group: None,
+                    requires: Vec::new(),
                 },
                 ReactionDef {
                     from_signal: "inventory".to_string(),
@@ -411,6 +413,8 @@ mod tests {
                     event: "replan".to_string(),
                     payload: None,
                     guard: None,
+                    join_group: None,
+                    requires: Vec::new(),
                 },
                 ReactionDef {
                     from_signal: "order".to_string(),
@@ -419,6 +423,8 @@ mod tests {
                     event: "audit".to_string(),
                     payload: None,
                     guard: None,
+                    join_group: None,
+                    requires: Vec::new(),
                 },
                 ReactionDef {
                     from_signal: "order".to_string(),
@@ -427,6 +433,8 @@ mod tests {
                     event: "panic".to_string(),
                     payload: None,
                     guard: None,
+                    join_group: None,
+                    requires: Vec::new(),
                 },
             ],
             components: None,
