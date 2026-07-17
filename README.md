@@ -69,7 +69,8 @@ The demo loads `order_approval` in the browser: edit the topology, step through 
 | `export`    | `to_dot`: render a topology to Graphviz DOT for visualization. |
 | `run`       | Shared scaffolding for the `sts` / `stt` / `stp` binaries: builds a runnable engine from a topology + fail-set. Not a stable library API. |
 | `ddl`       | Domain Description Language compiler: `.ddl` source → `TopologySchema` (JSON model). |
-| `check`     | Semantic checks for `stc --check`: report suspicious patterns (self-loops, unreachable states) as non-blocking warnings. |
+| `guard templates` | Top-level `guard <id> { <expr> }` declarations shared across reactions via `when <id>` references (inlined by the compiler, linted by `stc --check`). |
+| `check`     | Semantic checks for `stc --check`: report suspicious patterns (self-loops, unreachable states, unused / duplicate guards) as non-blocking warnings. |
 
 ## Documentation
 
@@ -94,7 +95,7 @@ The demo loads `order_approval` in the browser: edit the topology, step through 
 cargo test
 ```
 
-177 tests across unit, integration, CLI, and doctest files. All should pass with zero failures before merging.
+195 tests across unit, integration, CLI, and doctest files. All should pass with zero failures before merging.
 
 ## License
 
