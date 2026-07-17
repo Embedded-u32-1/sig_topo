@@ -5,9 +5,9 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.9–v0.10（M21–M23）、自定 M25–M27 均收口；四 CLI bin 统一于 run::；100 测试绿。进入空闲决策点后，经判断启动 v0.11 新方向：领域描述语言（DDL）。M28 起由 agent 逐步实现。**
+当前阶段：**v0.11 M28 ✅（DDL 编译器 + stc CLI，commit c67429b，129 测试绿）；下一步 M29（运行时 DOT 高亮 snapshot_dot）。**
 
-最近完成的工作（M21）：
+最近完成的工作（M28）：
 
 - `Cargo.toml` 注册 `sts` bin；`src/bin/sts.rs`（225 行，含 `event` / `state` / `trace` / `help` / `quit` + print-and-record 动作）；`tests/sts_test.rs`（3 个集成测试：正常跃迁 / 失败回滚 / state-trace 读取路径）。
 - 编译验证发现 sts.rs 对 engine API 的调用与真实签名**完全一致**，零修改；引擎零改动、未新增依赖。
@@ -128,9 +128,9 @@
 1. stp 的 fail_actions 是新增额外能力，但 stp 回放后不打印 trace（只 save_state）；要看注入失败的具体 action/rollback 行需额外调 format_trace——当前未做。
 2. 健康扫描候选 B（补 engine/schema/error 单元测试 + 错误路径 fixture）与候选 C（版本 bump 0.1.0 → 0.2.0 / 发布准备）仍未做，可作为下轮方向。
 
-### M28：v0.11 领域描述语言（DDL）编译器 —— 设计 + 实现（本轮起）
+### M28：v0.11 领域描述语言（DDL）编译器 ✅（commit c67429b）
 
-**目标**：让"描述文件"从面向实现的 JSON 升级为面向领域的小语言；用户用业务语义写 `.ddl`，编译到 `TopologySchema`，喂给既有引擎/工具链。引擎零改动。
+**目标**：让"描述文件"从面向实现的 JSON 升级为面向领域的小语言；用户用业务语义写 `.ddl`，编译到 `TopologySchema`，喂给既有引擎/工具链。引擎零改动。**已完成。**
 
 **语言设计（初版）**——面向业务语义、受控、左到右单次扫描：
 
@@ -189,7 +189,7 @@ reaction {
 4. 现有 100 测试零回归。
 5. `doc/ddl.md` 覆盖全部语法。
 
-### M29：运行时状态高亮 DOT（snapshot_dot，路线图 M2 未做项）
+### M29：运行时状态高亮 DOT（snapshot_dot，路线图 M2 未做项）—— 下一步
 
 **目标**：`stv` 当前只能画拓扑骨架；补一个"当前各信号处在哪"的运行时视图。
 
@@ -217,3 +217,11 @@ reaction {
 
 - 具体实现与端到端审核：委托子代理（Agent）。
 - 本进程负责：路线判断、计划记录、提交计划文档、按代理反馈把新事实更新到本计划。
+- 当前：M28 ✅；下一步委托 M29（snapshot_dot 运行时高亮）。
+
+### M28 收口观察（留给后续轮次，不阻塞 M28）
+
+1. reaction 守卫当前不被引擎支持，DDL 编译器已明确报错并指引替代方案（transition guard）。若未来要支持，需扩展 `ReactionDef` 加 guard 字段 + 级联匹配求值——引擎层改动，超出 M28 范围。
+2. 动作块 `{ }` 可选（agent 偏离决策），无动作的转换无需空 `{}`，合理降噪。
+3. AST 类型本地化（parser 自有 DdlDoc 等），与 serde 解耦；codegen 做 1:1 映射。
+4. `TopologySchema` 仅 Deserialize，故 stc.rs 手写字段→serde_json::Value 映射。
