@@ -33,6 +33,8 @@ Commands:
   event <signal> <event> [json payload]  send an event to a signal
   state                                   list all signal states
   trace                                   print the trace log
+  fail <action_id>                        force that action to fail (live rollback demo)
+  reset                                   clear the forced-failure set
   help                                    show this help
   quit / exit                             leave the shell
 ```
@@ -151,3 +153,80 @@ sts> quit
 ```
 
 A second walk-through with `gate_flow.json` — covering the `*` wildcard reset and multi-action `on-transition` — lives in [examples/gate_flow.md](../examples/gate_flow.md).
+
+## 在 sts 里现场演示回滚
+
+`sts` 能让你「亲眼看到」事务回滚，而无需写 Rust：用 `fail <action>` 把某个动作标记为「持续失败」，再触发它所在的转移，就会在 REPL 里看到 `Error: Action execution error: ...` + `State rolled back to '<源态>'`，`trace` 里则是 `ActionFailed` + `Rollbacked` 而没有 `StateChanged`。
+
+工作原理（不改引擎）：每个动作注册时多读一个共享的 `fail_set`——动作的 id 在集合里就返回 `EngineError::ActionExecutionError`，否则正常打印 + `Ok(())`。引擎本身对待这个错误和对待任何真实动作失败一模一样：试探性地提交目标态后，回滚到源态并记 `Rollbacked`（见 M19 事务回滚）。`fail` 只是让你从 REPL 里控制「哪个动作、在什么时候」失败。
+
+### `fail` 语义
+
+- `fail <action_id>` — 把 `<action_id>` 加入失败集合，回显 `will fail next: <action_id>`。**标记是「持续」的**：加入后该动作每次执行都会失败（方便你反复观察回滚）。
+- `reset` — 清空整个失败集合，回显 `fail set cleared`。清空后该动作恢复正常。
+- `fail` 不带参数会提示 `Usage: fail <action_id>`。
+
+### 会话转录（实跑）
+
+以下逐字运行自 [examples/order_approval.json](../examples/order_approval.json)。输入行紧跟在 `sts>` 提示符后；输出是实跑的（`trace` 的时间戳每次运行不同，结构一致）。
+
+注意此拓扑里 `approve` 只能从 `submitted` 触发，所以演示从 `submit` 进入 `submitted` 后开始：
+
+```bash
+cargo run --bin sts -- examples/order_approval.json
+```
+
+```
+sts> state
+order: draft
+sts> event order submit
+[action] order.log_draft_exit
+[action] order.validate_order_payload
+[action] order.notify_submitted
+order -> submitted
+  action executed: log_draft_exit
+  action executed: validate_order_payload
+  action executed: notify_submitted
+sts> state
+order: submitted
+sts> fail reserve_inventory
+will fail next: reserve_inventory
+sts> event order approve {"amount":5000}
+Error: Action execution error: injected failure for action 'reserve_inventory' (set via `fail`)
+State rolled back to 'submitted'
+sts> state
+order: submitted
+sts> trace
+[...] EventReceived order.submit payload=None
+[...] ActionStarted order.log_draft_exit
+[...] ActionSucceeded order.log_draft_exit
+[...] ActionStarted order.validate_order_payload
+[...] ActionSucceeded order.validate_order_payload
+[...] ActionStarted order.notify_submitted
+[...] ActionSucceeded order.notify_submitted
+[...] StateChanged order: draft -> submitted
+[...] EventReceived order.approve payload={"amount":5000}
+[...] ActionStarted order.reserve_inventory
+[...] ActionFailed order.reserve_inventory error=injected failure for action 'reserve_inventory' (set via `fail`)
+[...] Rollbacked order: approved -> submitted
+sts> reset
+fail set cleared
+sts> event order approve {"amount":5000}
+[action] order.reserve_inventory
+[action] order.notify_customer_approved
+order -> approved
+  action executed: reserve_inventory
+  action executed: notify_customer_approved
+sts> state
+order: approved
+sts> quit
+```
+
+逐行看关键点：
+
+1. `fail reserve_inventory` 前，`approve` 会正常走到 `approved`（此处用 `submit` 进入 `submitted`，给 `fail` 之后那次 `approve` 备好起点）。
+2. `fail` 之后发 `approve`：`reserve_inventory` 在 `on_transition` 阶段失败，引擎打印 `Error: Action execution error: ...`，随后 `State rolled back to 'submitted'`——信号态回到转移前的 `submitted`。
+3. `trace` 里，`approve` 那次是 `ActionStarted order.reserve_inventory` → `ActionFailed ...` → `Rollbacked order: approved -> submitted`，**没有** `StateChanged order: submitted -> approved`——和 M19 事务回滚「`StateChanged` 缺席、`ActionFailed` + `Rollbacked` 到场」完全一致。
+4. `reset` 清空失败集合后，同样的 `approve` 再次走到 `approved`。
+
+这正是 `sts` 的定位：整条链路（含回滚现场）都能在 REPL 里观察到，无需写 Rust。
