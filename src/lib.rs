@@ -1,3 +1,7 @@
+// M28: Domain Description Language compiler. Compiles `.ddl` source into the
+// engine's `TopologySchema` (see `src/ddl/`); the engine layer is untouched.
+pub mod ddl;
+
 pub mod compose;
 pub mod engine;
 pub mod error;
