@@ -1,0 +1,11 @@
+{
+  "expected_final_states": {
+    "task": "done",
+    "ui": "busy"
+  },
+  "expected_guard_blocked": [],
+  "events": [
+    { "signal_id": "task", "event": "start" },
+    { "signal_id": "task", "event": "finish", "payload": { "record": false } }
+  ]
+}

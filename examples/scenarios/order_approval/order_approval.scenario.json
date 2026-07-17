@@ -1,0 +1,12 @@
+{
+  "expected_final_states": {
+    "order": "shipped"
+  },
+  "expected_guard_blocked": [1],
+  "events": [
+    { "signal_id": "order", "event": "submit" },
+    { "signal_id": "order", "event": "approve", "payload": { "amount": 0 } },
+    { "signal_id": "order", "event": "approve", "payload": { "amount": 5000 } },
+    { "signal_id": "order", "event": "ship" }
+  ]
+}

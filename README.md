@@ -65,6 +65,7 @@ cargo run --bin stc -- <in.ddl> [out.json]
 - [Transaction](doc/transaction.md) — single-signal transactional rollback semantics (v0.8).
 - [Run module](doc/run.md) — shared `sts`/`stt`/`stp` scaffolding (not a stable library API).
 - [DDL](doc/ddl.md) — the Domain Description Language: write `.ddl` instead of JSON, compile with `stc`.
+- [Scenarios](doc/scenarios.md) — the `examples/scenarios/` regression + teaching library (each scenario is a self-contained `.ddl` + `.scenario.json` + `EXPECTED.md` walk-through).
 - [Roadmap](doc/roadmap.md) — milestone history and upcoming direction.
 
 ## Tests

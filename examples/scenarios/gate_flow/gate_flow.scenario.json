@@ -1,0 +1,15 @@
+{
+  "expected_final_states": {
+    "gate": "closed"
+  },
+  "expected_guard_blocked": [1],
+  "events": [
+    { "signal_id": "gate", "event": "open" },
+    { "signal_id": "gate", "event": "fault", "payload": { "emergency": false } },
+    { "signal_id": "gate", "event": "fault", "payload": { "emergency": true } },
+    { "signal_id": "gate", "event": "reset" },
+    { "signal_id": "gate", "event": "open" },
+    { "signal_id": "gate", "event": "close" },
+    { "signal_id": "gate", "event": "reset" }
+  ]
+}
