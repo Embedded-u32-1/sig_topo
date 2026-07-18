@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.17 全收口（M47 ✅ 6c76d42 + M48 ✅，237 测试绿，version 0.7.0）。**
+当前阶段：**v0.17 全收口（M47–M48 ✅，237 测试绿，0.7.0）。空闲决策点后，经判断启动 v0.18 新方向：guard 可视化 CLI 收尾。M49 起由 agent 逐步实现。**
 
 最近完成的工作（M33）：
 
@@ -645,3 +645,31 @@ v0.17（M47 reaction 补偿 + M48 收口）全收口，237 测试绿，version 0
 | P4：多租户/会话 | 多个 engine 实例隔离运行 + 快照导出导入（部署/教学场景）。 |
 
 本次不自动推进；等待下一步指令。
+
+## v0.18 下一段：guard 可视化 CLI 收尾
+
+### 路线判断
+
+M42 已实现 snapshot_dot_extended（按 guard 结果着色 reaction 边），但 CLI 入口 `stv` 还没接入。在 P1-P4 候选中，**P2（guard 可视化收尾）是最自然的闭环步骤**——让用户"一眼看到 guard 阻断在哪"，是 guard 可观测性故事（M38 guard trace → M41 why 命令 → M42 DOT 着色 → P2 CLI）的最后一环。
+
+**节奏**：M49 guard 可视化 CLI（stv --guard 一键渲染 snapshot_dot_extended）→ M50 收口。
+
+### M49：v0.18 guard 可视化 CLI —— 设计 + 实现（本轮起）
+
+目标：让用户在命令行一键生成含 guard 求值着色的运行时 DOT。
+
+- `src/bin/stv.rs`（或 `src/export`）新增子命令/模式：`stv --guard <topology> <state.json>` → 从 engine trace + snapshot_dot_extended 渲染含 guard 结果的 DOT。
+- 实现思路（二选一）：
+  - (a) **独立 CLI**：`stv --guard <topology.json> <state.json>` 直接读 JSON 拓扑 + 状态快照 → 调 `to_dot_extended(schema, states, guard_info)` 输出 DOT。需要先从 trace 构建 guard_info（trace 来自 engine，但独立 CLI 没 engine）。**问题**：独立 CLI 无 engine 运行，拿不到 guard_info。
+  - (b) **集成到 sts**（推荐）：在 `sts` REPL 中已有 `dot-ext` 命令（M42 实现），本里程碑聚焦**让 `dot-ext` 更易用 + 加 SVG 自动渲染**（调用系统 `dot` 生成 SVG）。
+- **推荐方案 (b)**：扩展 `sts` 的 `dot-ext` 命令，集成到 `dot` 命令行工具（同 M29 的 `stv --live` 生成 SVG 路径），生成 `<topology>_guarded.svg`。
+- 测试：跑含 guard 场景 → `dot-ext` 命令 → 验证输出含 guard result 颜色属性。
+- 文档：`doc/visualization.md` 补 "Guard visualization in sts" 节。
+
+验收：sts dot-ext 命令输出含 guard 着色的 DOT（并可经 `dot` 渲染为 SVG）；237 测试零回归；clippy 零警告。
+
+### M50：收口
+
+- doc-comments 复核。
+- version 0.7.0 → 0.8.0（guard 故事完整闭环）。
+- README / roadmap / plan 同步。
