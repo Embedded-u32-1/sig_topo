@@ -95,7 +95,7 @@ The demo loads `order_approval` in the browser: edit the topology, step through 
 cargo test
 ```
 
-237 tests across unit, integration, CLI, and doctest files. All should pass with zero failures before merging.
+245 tests across unit, integration, CLI, and doctest files. All should pass with zero failures before merging.
 
 ## License
 
