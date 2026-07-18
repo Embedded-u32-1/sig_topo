@@ -13,13 +13,34 @@ use serde_json::{Map, Value};
 use signal_topology::check::{check_ddl, check_schema};
 use signal_topology::ddl::compile_full;
 use signal_topology::schema::{ActionBinding, TopologySchema};
+use signal_topology::watch::{parse_watch_args, watch_file, WatchEvent};
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::exit;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    // Subcommand dispatch: `stc watch ...` enters watch mode; everything else
+    // is the one-shot compile path below. The `watch` keyword is the first
+    // token that isn't the binary name.
+    if args.get(1).map(|s| s.as_str()) == Some("watch") {
+        let argv = if args.len() > 2 { &args[2..] } else { &[] };
+        match parse_watch_args(argv) {
+            Ok(w) => cmd_watch(w),
+            Err(e) => {
+                eprintln!("stc watch: {}", e);
+                eprintln!(
+                    "Usage: stc watch <file.ddl> [--scenario <file.json>] [--interval <ms>]"
+                );
+                exit(1);
+            }
+        }
+        return;
+    }
 
     // Pull the optional `--check` flag out of the arg list; everything else is
     // positional. This keeps `stc --check <ddl> [out]` and `stc <ddl> [out]`
@@ -39,6 +60,7 @@ fn main() {
 
     if positional.is_empty() || positional.len() > 2 {
         eprintln!("Usage: stc [--check] <input.ddl> [output.json]");
+        eprintln!("       stc watch <file.ddl> [--scenario <file.json>] [--interval <ms>]");
         exit(1);
     }
 
@@ -216,4 +238,47 @@ fn action_binding_to_value(a: &ActionBinding) -> Value {
         );
     }
     Value::Object(m)
+}
+
+// ---------------------------------------------------------------------------
+// M51: `stc watch` — recompile a `.ddl` file on change.
+// ---------------------------------------------------------------------------
+
+fn cmd_watch(w: signal_topology::watch::WatchArgs) {
+    // Ctrl+C is the stop signal. We rely on the default SIGINT behaviour
+    // (process terminates); the shared flag exists so integration tests can end
+    // the loop deterministically from another thread. Print once so the user
+    // knows what is being watched and how to stop.
+    let running = Arc::new(AtomicBool::new(true));
+    println!(
+        "Watching '{}' every {}ms (Ctrl+C to stop)...",
+        w.ddl_path.display(),
+        w.interval_ms
+    );
+    if let Some(scn) = &w.scenario_path {
+        println!("On each successful compile, running scenario '{}''", scn.display());
+    }
+
+    let mut callback = |event: WatchEvent| match event {
+        WatchEvent::CompiledOk => println!("Recompiled OK"),
+        WatchEvent::CompileError(msg) => eprintln!("Recompile failed: {}", msg),
+        WatchEvent::ScenarioResult { total, failures } => {
+            if failures == 0 {
+                println!("Scenario PASS: {total} event(s)");
+            } else {
+                println!("Scenario FAIL: {failures}/{total} event(s) failed");
+            }
+        }
+    };
+    watch_file(
+        &w.ddl_path,
+        w.scenario_path.as_deref(),
+        w.interval_ms,
+        &running,
+        &mut callback,
+    );
+
+    // Reached only when a test flips the stop flag; Ctrl+C terminates the
+    // process before this line in normal use. Print for an orderly exit.
+    println!("Watch stopped.");
 }

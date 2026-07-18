@@ -601,3 +601,49 @@ A self-loop is not always a mistake. Two common sources:
 If the self-loop is intentional (the `gate_flow` reset is), ignore the warning.
 If it is not, either remove the arm or rewrite the wildcard so its `to` is not
 in the source-state set.
+
+## Watch mode
+
+`stc watch` polls a `.ddl` file for changes and recompiles it on every edit --
+handy for a tight edit / inspect loop without re-running `stc` by hand:
+
+```
+stc watch <file.ddl> [--scenario <file.json>] [--interval <ms>]
+```
+
+- The file is compiled once at startup, then recompiled every time its mtime
+  changes. A clean compile prints `Recompiled OK`; a compile error prints
+  `Recompile failed: ...` with the line/column and keeps watching (the next
+  edit is compiled afresh).
+- `--interval` sets the poll period in milliseconds (default `500`, minimum
+  `100`). The mtime check is a plain `fs::metadata` poll -- no notify crate,
+  no new dependencies.
+- `--scenario <file.json>` turns each successful compile into a regression
+  check: the scenario is replayed against a fresh engine built from the
+  recompiled schema, and a `Scenario PASS: N event(s)` / `Scenario FAIL:
+  k/N event(s) failed` line is printed. A scenario file that cannot be read or
+  parsed is reported as a recompile failure. This mirrors `stt`'s replay
+  semantics (per-event `fail_actions`, record-and-continue), so a watched
+  file that breaks its scenario is caught the moment it is saved.
+- Edits that land within 200 ms of the previous *compile* are debounced: the
+  mtime is recorded so a later distinct change is not lost, but the
+  half-written file is not compiled. This avoids spurious failures when an
+  editor saves in several steps.
+- Ctrl+C stops the watcher.
+
+Example (edit the file in another terminal between the lines):
+
+```
+$ stc watch order.ddl --scenario order.scenario.json --interval 200
+Watching 'order.ddl' every 200ms (Ctrl+C to stop)...
+On each successful compile, running scenario 'order.scenario.json'
+Recompiled OK
+Scenario PASS: 4 event(s)          # initial save
+Recompiled OK
+Scenario PASS: 4 event(s)          # added a transition
+Recompile failed: Failed to compile 'order.ddl': Parse error: line 12 col 8: ...
+```
+
+`stc watch` only depends on the standard library (`std`), so the crate's
+dependency set is unchanged. Errors are printed to stderr with a line/column
+and a non-zero exit; nothing panics.

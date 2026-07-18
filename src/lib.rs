@@ -79,6 +79,12 @@ pub mod run;
 /// `ReactionDef`, `ActionBinding`).
 pub mod schema;
 
+/// M51: `stc watch` — poll a `.ddl` file for changes and recompile on change.
+/// Pure std only (no new Cargo dependencies). Not part of the stable library
+/// surface — treat it as build support for the `stc` binary; binary usage and
+/// docs take precedence over these APIs.
+pub mod watch;
+
 /// Ordered trace log of runtime events (`TraceEvent`, `TraceLog`).
 pub mod trace;
 
