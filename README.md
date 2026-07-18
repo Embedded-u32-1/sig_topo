@@ -1,60 +1,37 @@
 # signal-topology
 
-A file-driven Rust state-machine engine: describe a system as a JSON topology of signals, transitions, reactions and guards, then run scenarios, persist state, trace events, and export diagrams.
+A file-driven Rust state-machine / workflow engine. Describe a system as a **DDL** topology of signals, transitions, reactions and guards, then run scenarios, persist state, trace events, and export diagrams to DOT/SVG/WASM.
+
+**[5-min quick start](doc/getting-started.md)** · [Architecture](doc/architecture.md) · [Changelog](CHANGELOG.md)
 
 ## Quick Start
 
 ```bash
 cargo build
 
-# Render a topology to DOT (and SVG if Graphviz is installed)
-cargo run --bin stv -- examples/cascade_topology.json
+# Write + compile a DDL topology
+cargo run --bin stc -- my.ddl my.json
 
-# Run a scenario and print the trace
-cargo run --bin stt -- examples/cascade_topology.json scenario.json
+# Drive it interactively (REPL: event / state / trace / why / dot-ext)
+cargo run --bin sts -- my.json
 
-# Persist / restore engine state
-cargo run --bin stp -- save examples/cascade_topology.json scenario.json state.json
-cargo run --bin stp -- reload examples/cascade_topology.json new_topology.json state.json
+# Watch mode (auto-recompile on change + scenario regression)
+cargo run --bin stc -- watch my.ddl --interval 500
 
-# Multi-file topologies (components / instances / includes)
-cargo run --bin stv -- examples/components/house.json
-```
+# Visualize (DOT + SVG via Graphviz)
+cargo run --bin stv -- my.json          # static skeleton
+cargo run --bin sts -- my.json          # then: dot-ext  -> runtime view with guard colors
 
-`house.json` demonstrates composition: parameterized components, instances, and cross-file includes are all resolved before the engine runs. See [doc/composition.md](doc/composition.md).
+# Scenario replay + persist
+cargo run --bin stt -- my.json scenario.json
+cargo run --bin stp -- save my.json scenario.json state.json
 
-# Interactive simulation
-
-```bash
-cargo run --bin sts -- examples/order_approval.json
-```
-
-# Compile a DDL topology to JSON
-
-```bash
-cargo run --bin stc -- <in.ddl> [out.json]
-```
-
-`stc` (signal-topology-compiler) compiles a `.ddl` [Domain Description Language](doc/ddl.md) source file into the engine's JSON topology schema. With no output path the JSON is printed to stdout.
-
-```bash
-# Lint a .ddl for suspicious patterns (self-loops, unreachable states)
-cargo run --bin stc -- --check <in.ddl>
-```
-
-`stc --check` prints non-blocking warnings to stderr and still writes the JSON — warnings never abort the run or change the exit code. See [doc/ddl.md](doc/ddl.md) "Linting with `stc --check`".
-
-# Run the WASM browser demo
-
-```bash
+# Browser demo (WASM)
 wasm-pack build --target web --out-dir pkg --release -p wasm-topology
-python3 -m http.server 8080 -d .        # serve the repo root over http
-# open http://localhost:8080/demo/index.html
+python3 -m http.server 8080 && open http://localhost:8080/demo/index.html
 ```
 
-The demo loads `order_approval` in the browser: edit the topology, step through `submit` / `approve` / `ship`, and watch the state pill, live DOT and traces pane update. See [doc/wasm.md](doc/wasm.md).
-
-`sts` (signal-topology-shell) loads a topology and drops you into a REPL where you can send events, inspect state, and print the trace log one step at a time. Walk-throughs: [examples/order_approval.md](examples/order_approval.md), [examples/gate_flow.md](examples/gate_flow.md). Full command reference: [doc/shell.md](doc/shell.md).
+Full walk-throughs: [order_approval.md](examples/order_approval.md), [gate_flow.md](examples/gate_flow.md). Shell reference: [doc/shell.md](doc/shell.md). DDL reference: [doc/ddl.md](doc/ddl.md).
 
 ## Modules
 
@@ -74,6 +51,9 @@ The demo loads `order_approval` in the browser: edit the topology, step through 
 
 ## Documentation
 
+- [Quick start](doc/getting-started.md) — 5-minute walkthrough
+- [Architecture](doc/architecture.md) — modules, core concepts, data flow
+- [Changelog](CHANGELOG.md) — version history
 - [Visualization](doc/visualization.md) — rendering topologies to DOT/SVG with `stv`.
 - [Signal Cascades](doc/cascades.md) — reactions and the cascade depth limit.
 - [Guards](doc/guards.md) — transition guard expressions.
