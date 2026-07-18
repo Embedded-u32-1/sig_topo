@@ -136,3 +136,30 @@ Programmatically, `engine.snapshot_dot_extended()` returns the same extended DOT
 ### How colors are decided
 
 Implemented by `to_dot_extended(schema, states, guard_info)` in `src/export/dot.rs`. `guard_info` maps each reaction `(from_signal, from_state, to_signal, event)` to its guard-result string (`"true"`, `"false"`, or `"error: <msg>"`); a reaction missing from the map is drawn dashed black. The reaction's tail anchors on the watched `from_state` node (or, for a `*` wildcard reaction, the signal's current state), and its head anchors on the target signal's first state — a reaction delivers an *event* to a signal rather than targeting a particular state, so the first state is a stable in-cluster landing point.
+
+## Guard visualization in sts
+
+The `dot-ext` command above prints the guard-colored DOT to stdout. As of v0.7.0 it goes one step further: after printing the DOT it also **renders an SVG** through the system `dot`, writing `<topology_stem>_guarded.svg` next to the topology file and printing its path. This makes the whole guard viz story actionable from the REPL without any extra pipe:
+
+```
+sts> dot-ext
+digraph Topology {
+...
+  n_order_approved -> n_inventory_idle [label="allocate [guard: true]" color=green style=solid];
+}
+Generated examples/order_approval_guarded.svg
+```
+
+Open the generated `.svg` in any web browser to see the diagram.
+
+The SVG step funnels through the shared `render_dot_to_svg` helper in `src/export/render.rs`, the same helper `stv` uses — so the Graphviz availability check and `dot` invocation stay in sync across both visualization binaries. The behavior, depending on the environment:
+
+- **`dot` on PATH** — the SVG is written next to the topology as `<stem>_guarded.svg` and its path is printed.
+- **`dot` not on PATH** — the command falls back to the plain DOT and prints a note suggesting you install Graphviz, exactly as it did before.
+
+Two variants of the command:
+
+- `dot-ext` — print the DOT *and* render the SVG (pipe-friendly: the DOT still goes to stdout).
+- `dot-ext --svg` — render only the SVG, suppressing the stdout DOT dump. Handy when you just want the file and want a clean redirect.
+
+The SVG is named `<topology_stem>_guarded.svg` and placed in the same directory as the topology, mirroring how `stv` names its outputs (`<stem>.dot` / `<stem>.svg`, `<stem>_live.dot` / `<stem>_live.svg`). The `dot-ext` SVG never collides with those because of its `_guarded` suffix.

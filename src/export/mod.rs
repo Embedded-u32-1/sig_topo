@@ -10,6 +10,17 @@
 /// Render a topology to Graphviz DOT.
 pub mod dot;
 
+/// M49: render a DOT source to SVG through the system Graphviz `dot` (the
+/// shared SVG-rendering helper the visualization binaries funnel through, so
+/// the "pipe DOT to `dot -Tsvg`, write the SVG" step does not drift between
+/// them). Re-exported from [`render::render_dot_to_svg`].
+pub mod render;
+/// Render a topology to SVG through the system Graphviz `dot`. Re-exported from
+/// [`render::render_dot_to_svg`].
+pub use render::render_dot_to_svg;
+/// Outcome of rendering a DOT source to SVG; re-exported from
+/// [`render::SvgOutcome`].
+pub use render::SvgOutcome;
 /// Render a topology's structural skeleton (initial states highlighted
 /// lightblue). Re-exported from [`dot::to_dot`].
 pub use dot::to_dot;

@@ -33,6 +33,8 @@ Commands:
   event <signal> <event> [json payload]  send an event to a signal
   state                                   list all signal states
   trace                                   print the trace log
+  dot                                     print runtime-highlighted DOT
+  dot-ext [--svg]                         print extended DOT with guard-eval result edges (+ render SVG)
   fail <action_id>                        force that action to fail (live rollback demo)
   reset                                   clear the forced-failure set
   why <from> <state> <to> <event>         print guard evaluation trace for a reaction
@@ -90,6 +92,21 @@ sts> trace
 ```
 
 With no events yet, `trace` prints `(no trace events)`.
+
+### `dot` / `dot-ext`
+
+`dot` prints the runtime-highlighted DOT (live state highlighted lightgreen); `dot-ext` prints the *extended* DOT that additionally draws every cross-signal reaction edge colored by its guard-evaluation result — solid green if the guard passed, dashed gray if it was blocked, dashed red if it errored, dashed black if it was never evaluated this run. See [Visualization](visualization.md).
+
+As of v0.7.0 `dot-ext` also **renders an SVG** through the system `dot`: it writes `<topology_stem>_guarded.svg` next to the topology file and prints its path. With no Graphviz on PATH it falls back to the plain DOT and suggests installing Graphviz. `dot-ext --svg` renders only the SVG, suppressing the stdout DOT dump for a clean redirect:
+
+```
+sts> dot-ext
+digraph Topology {
+...
+  n_order_approved -> n_inventory_idle [label="allocate [guard: true]" color=green style=solid];
+}
+Generated examples/order_approval_guarded.svg
+```
 
 ### `why <from> <state> <to> <event>`
 

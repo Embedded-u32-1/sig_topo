@@ -1,8 +1,10 @@
+use signal_topology::export::{render_dot_to_svg, SvgOutcome};
 use signal_topology::run::{format_trace, load_topology_for_run};
 use signal_topology::TopologyEngine;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::io::{self, Write};
+use std::path::Path;
 use std::rc::Rc;
 use std::{env, process};
 
@@ -53,7 +55,7 @@ fn main() {
             Ok(Command::Fail { action_id }) => session.fail(&action_id),
             Ok(Command::Reset) => session.reset(),
             Ok(Command::Dot) => cmd_dot(&session),
-            Ok(Command::DotExt) => cmd_dot_ext(&session),
+            Ok(Command::DotExt { svg }) => cmd_dot_ext(&session, svg),
             Ok(Command::Why {
                 from_signal,
                 from_state,
@@ -83,6 +85,9 @@ fn main() {
 struct StsSession {
     engine: TopologyEngine,
     fail_set: Rc<RefCell<HashSet<String>>>,
+    // The topology file the session was built from, kept so `dot-ext` can name
+    // its `<stem>_guarded.svg` next to the source file (mirroring `stv`).
+    topology_path: String,
 }
 
 impl StsSession {
@@ -93,7 +98,11 @@ impl StsSession {
     fn new(topology_path: &str) -> Self {
         let fail_set = Rc::new(RefCell::new(HashSet::new()));
         let engine = load_topology_for_run(topology_path, Some(Rc::clone(&fail_set)), true);
-        Self { engine, fail_set }
+        Self {
+            engine,
+            fail_set,
+            topology_path: topology_path.to_string(),
+        }
     }
 
     /// Mark `action_id` to fail on its next (and every subsequent) execution
@@ -135,7 +144,11 @@ enum Command {
     },
     Reset,
     Dot,
-    DotExt,
+    DotExt {
+        // When true, render the SVG but suppress the stdout DOT dump — the
+        // "explicit SVG" mode of `dot-ext --svg`.
+        svg: bool,
+    },
     Why {
         from_signal: String,
         from_state: String,
@@ -197,7 +210,13 @@ fn parse_command(line: &str) -> Result<Command, ParseError> {
         },
         Some("reset") => Ok(Command::Reset),
         Some("dot") => Ok(Command::Dot),
-        Some("dot-ext") => Ok(Command::DotExt),
+        Some("dot-ext") => {
+            // `dot-ext` accepts an optional `--svg` flag: render the SVG and
+            // skip the stdout DOT dump. Any other trailing token is ignored,
+            // matching the lenient parsing of the rest of the REPL.
+            let svg = parts.get(1) == Some(&"--svg");
+            Ok(Command::DotExt { svg })
+        }
         Some("why") => {
             if parts.len() < 5 {
                 return Err(ParseError::WhyArgs);
@@ -285,8 +304,72 @@ fn cmd_dot(session: &StsSession) {
 /// edge's guard errored, and a black dashed edge was never evaluated this run.
 /// This is the visual companion to `why`: `why` tells you the guard result for
 /// one reaction as text, `dot-ext` shows every reaction at a glance.
-fn cmd_dot_ext(session: &StsSession) {
-    print!("{}", session.engine.snapshot_dot_extended());
+///
+/// After printing the DOT to stdout this also renders an SVG through the
+/// system `dot` (when it is on PATH): `<topology_stem>_guarded.svg` next to
+/// the topology file, and prints its path. The SVG is printed to stdout as
+/// well (pipe-friendly), but `dot-ext --svg` renders only the SVG — the DOT
+/// dump is suppressed for a clean redirect. With no Graphviz the command
+/// falls back to the plain DOT and suggests installing it, exactly as before.
+fn cmd_dot_ext(session: &StsSession, svg_only: bool) {
+    // Lock stdout once and run the shared, testable implementation against it
+    // so the REPL prints exactly what `dot_ext` writes.
+    let mut stdout = io::stdout();
+    dot_ext(
+        &session.engine.snapshot_dot_extended(),
+        svg_only,
+        &mut stdout,
+        &session.topology_path,
+    )
+    .expect("writing DOT and status to stdout should succeed");
+}
+
+/// Emit the extended guard DOT (unless `svg_only`) and render the guarded SVG
+/// for the topology at `topology_path`. All output — DOT, status line, and
+/// the failure note — goes to `out`, so the function is unit-testable: a test
+/// can pass a `Vec<u8>` and assert on exactly what `dot-ext` prints. The SVG
+/// itself is written next to the topology as a side effect of rendering.
+///
+/// Mirror of the `format_why` / `cmd_why` split: the testable core lives here,
+/// the thin REPL wrapper is `cmd_dot_ext`.
+fn dot_ext(
+    dot: &str,
+    svg_only: bool,
+    out: &mut impl Write,
+    topology_path: &str,
+) -> io::Result<()> {
+    if !svg_only {
+        write!(out, "{}", dot)?;
+    }
+
+    let svg_path = guarded_svg_path(topology_path);
+    match render_dot_to_svg(dot, &svg_path) {
+        SvgOutcome::Generated => writeln!(out, "Generated {}", svg_path.display()),
+        SvgOutcome::GraphvizNotInstalled => writeln!(
+            out,
+            "Graphviz 'dot' not found in PATH. Install Graphviz to generate '{}'.",
+            svg_path.display()
+        ),
+        SvgOutcome::Failed(msg) => writeln!(
+            out,
+            "{} SVG was not generated for '{}'.",
+            msg,
+            svg_path.display()
+        ),
+    }
+}
+
+/// The path `dot-ext` writes its SVG to: next to the topology file, named
+/// `<topology_stem>_guarded.svg`. Falls back to the working directory with a
+/// `topology_guarded.svg` name when the path has no usable stem or parent.
+fn guarded_svg_path(topology_path: &str) -> std::path::PathBuf {
+    let path = Path::new(topology_path);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("topology");
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!("{}_guarded.svg", stem))
 }
 
 /// `why <from> <state> <to> <event>` — print every `ReactionGuardEvaluated` trace
@@ -319,7 +402,7 @@ fn cmd_help() {
     println!("  state                                   list all signal states");
     println!("  trace                                   print the trace log");
     println!("  dot                                     print runtime-highlighted DOT");
-    println!("  dot-ext                                 print extended DOT with guard-eval result edges");
+    println!("  dot-ext [--svg]                         print extended DOT with guard-eval result edges (+ render SVG)");
     println!("  fail <action_id>                        force that action to fail");
     println!("  reset                                   clear forced-failure set");
     println!("  why <from> <state> <to> <event>         print guard evaluation trace for a reaction");
@@ -410,7 +493,78 @@ mod tests {
 
     #[test]
     fn parse_dot_ext_command() {
-        assert_eq!(parse_command("dot-ext").unwrap(), Command::DotExt);
+        assert_eq!(
+            parse_command("dot-ext").unwrap(),
+            Command::DotExt { svg: false }
+        );
+    }
+
+    /// `dot-ext --svg` is parsed as the SVG-only variant (no stdout DOT dump).
+    #[test]
+    fn parse_dot_ext_svg_flag() {
+        assert_eq!(
+            parse_command("dot-ext --svg").unwrap(),
+            Command::DotExt { svg: true }
+        );
+    }
+
+    /// `guarded_svg_path` mirrors `stv`'s layout: `<stem>_guarded.svg` next to
+    /// the topology. Proves the SVG lands beside the source, not in the cwd.
+    #[test]
+    fn guarded_svg_path_is_next_to_topology_with_guarded_stem() {
+        assert_eq!(
+            guarded_svg_path("examples/order_approval.json"),
+            std::path::PathBuf::from("examples/order_approval_guarded.svg")
+        );
+        assert_eq!(
+            guarded_svg_path("a/b/topology.json"),
+            std::path::PathBuf::from("a/b/topology_guarded.svg")
+        );
+    }
+
+    /// With no usable stem or parent, the SVG falls back to a `topology`
+    /// name in the working directory (parent `.`) rather than panicking.
+    #[test]
+    fn guarded_svg_path_falls_back_when_path_is_bare() {
+        assert_eq!(
+            guarded_svg_path(""),
+            std::path::PathBuf::from("./topology_guarded.svg")
+        );
+    }
+
+    /// `dot_ext` writes the extended DOT to the given writer before prompting
+    /// SVG rendering — proving the command's stdout is the guard-colored DOT,
+    /// and that it is suppressed in `--svg` mode.
+    #[test]
+    fn dot_ext_writes_guard_dot_to_writer_and_suppresses_in_svg_mode() {
+        // Capture `dot_ext`'s stdout in a buffer via the writer it accepts.
+        let session = StsSession::new("examples/order_approval.json");
+        // There are no reactions in this topology, so the extended DOT is just
+        // the live-state-highlighted view — enough to pin down the writer path.
+        let dot = session.engine.snapshot_dot_extended();
+        assert!(
+            dot.contains("digraph Topology"),
+            "extended DOT should open a digraph"
+        );
+
+        let mut out = Vec::new();
+        dot_ext(&dot, false, &mut out, &session.topology_path).expect("write succeeds");
+        let printed = String::from_utf8(out).expect("utf-8");
+        assert!(
+            printed.contains("digraph Topology"),
+            "default `dot-ext` should print the DOT; got:\n{}",
+            printed
+        );
+
+        // `--svg` mode: the DOT dump is suppressed; only the status line remains.
+        let mut svg_out = Vec::new();
+        dot_ext(&dot, true, &mut svg_out, &session.topology_path).expect("write succeeds");
+        let svg_printed = String::from_utf8(svg_out).expect("utf-8");
+        assert!(
+            !svg_printed.contains("digraph Topology"),
+            "`dot-ext --svg` should suppress the DOT dump; got:\n{}",
+            svg_printed
+        );
     }
 
     #[test]

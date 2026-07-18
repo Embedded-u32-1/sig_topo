@@ -1,44 +1,37 @@
-use signal_topology::export::{to_dot, to_dot_with_state};
+use signal_topology::export::{render_dot_to_svg, to_dot, to_dot_with_state, SvgOutcome};
 use signal_topology::load_topology;
 use signal_topology::persist::StateSnapshot;
 use std::env;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
-/// Render a DOT file at `dot_path` and, if Graphviz is on PATH, render an SVG
-/// next to it (same stem, `.svg` extension). Prints the paths produced.
-fn render(dot: String, dot_path: &Path) {
-    fs::write(dot_path, dot).unwrap_or_else(|e| {
+/// Render `dot` to a `.dot` file at `dot_path` and, if Graphviz is on PATH,
+/// render an SVG next to it (same stem, `.svg` extension). Prints the paths
+/// produced.
+///
+/// The SVG step funnels through the shared `render_dot_to_svg` helper (piping
+/// the in-memory DOT to `dot -Tsvg` via stdin) so the availability check +
+/// `dot` invocation stay in sync with `sts`.
+fn render_dot(dot: String, dot_path: &Path) {
+    fs::write(dot_path, &dot).unwrap_or_else(|e| {
         eprintln!("Failed to write '{}': {}", dot_path.display(), e);
         std::process::exit(1);
     });
     println!("Generated {}", dot_path.display());
 
     let svg_path = dot_path.with_extension("svg");
-    match Command::new("dot").arg("-V").output() {
-        Ok(_) => match Command::new("dot")
-            .arg("-Tsvg")
-            .arg(dot_path)
-            .arg("-o")
-            .arg(&svg_path)
-            .status()
-        {
-            Ok(status) if status.success() => {
-                println!("Generated {}", svg_path.display());
-            }
-            Ok(status) => {
-                eprintln!("'dot' exited with status {}. SVG was not generated.", status);
-            }
-            Err(e) => {
-                eprintln!("Failed to run 'dot': {}", e);
-            }
-        },
-        Err(_) => {
+    match render_dot_to_svg(&dot, &svg_path) {
+        SvgOutcome::Generated => {
+            println!("Generated {}", svg_path.display());
+        }
+        SvgOutcome::GraphvizNotInstalled => {
             println!(
                 "Graphviz 'dot' not found in PATH. Install Graphviz to generate '{}'.",
                 svg_path.display()
             );
+        }
+        SvgOutcome::Failed(msg) => {
+            eprintln!("{} SVG was not generated for '{}'.", msg, svg_path.display());
         }
     }
 }
@@ -60,7 +53,7 @@ fn skeleton_mode(input_path: &Path) {
         .unwrap_or("topology");
     let parent = input_path.parent().unwrap_or_else(|| Path::new("."));
 
-    render(to_dot(&schema), &parent.join(format!("{}.dot", input_stem)));
+    render_dot(to_dot(&schema), &parent.join(format!("{}.dot", input_stem)));
 }
 
 /// `stv --live <topology.json> <state.json>` — render the topology with each
@@ -92,7 +85,7 @@ fn live_mode(input_path: &Path, state_path: &Path) {
 
     // `<stem>.dot` is reserved for the skeleton; the live view writes
     // `<stem>_live.dot` so the two can coexist.
-    render(
+    render_dot(
         to_dot_with_state(&schema, &snapshot.states),
         &parent.join(format!("{}_live.dot", input_stem)),
     );
