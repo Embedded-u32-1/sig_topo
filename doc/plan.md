@@ -5,7 +5,7 @@
 ## 当前阶段
 
 项目：`sig_topo` —— 文件驱动的 Rust 状态机引擎（JSON 拓扑 → 解析 → 状态流转 → 动作执行 → 可视化/持久化/追踪），按里程碑演进。
-当前阶段：**v0.16 M44 ✅（9ce7e27）+ M45 ✅（3a78101，224 测试绿）；下一步 M46（收口：version 0.6.0）。**
+当前阶段：**v0.16 全收口（M44 ✅ 9ce7e27 + M45 ✅ 3a78101 + M46 ✅，226 测试绿，version 0.6.0）。**
 
 最近完成的工作（M33）：
 
@@ -217,7 +217,7 @@ reaction {
 
 - 具体实现与端到端审核：委托子代理（Agent）。
 - 本进程负责：路线判断、计划记录、提交计划文档、按代理反馈把新事实更新到本计划。
-- 当前：M44 ✅ M45 ✅；下一步委托 M46（收口：version 0.6.0 + doc-comments 复核）。
+- 当前：M44 ✅ M45 ✅ M46 ✅；v0.16 全收口。下一步方向待判断。
 
 ### M28 收口观察（留给后续轮次，不阻塞 M28）
 
@@ -586,8 +586,21 @@ v0.14（M38 reaction guard 复合语义 + M39 guard demo + stc --check 增强 + 
 
 目标：把一组 signal+transaction+reaction 封装为可复用"子拓扑组件"（增强版 component，带实例化参数 + 对外暴露的端口/接口）。
 
-### M46：收口 —— 下一步
+### M46：收口 ✅（v0.16 全收口）
 
 - doc-comments 复核。
 - version 0.5.0 → 0.6.0（工作流引擎是质的飞跃）。
 - README / roadmap / plan 同步。
+
+## v0.16 完成后的下一步方向判断
+
+v0.16（M44 fork/join + M45 sub-topology + M46 收口）全收口，226 测试绿，version 0.6.0。候选后续方向（暂不排期，待下一步指令）：
+
+| 方向 | 说明 |
+|------|------|
+| N1：guard 可视化 CLI 便利性 | `snapshot_dot_extended` 已完整；补 `stv --live` 一键渲染 guard-blocked reaction。 |
+| N2：stc LSP | 基于 check_ddl + guard_ref 的补全/诊断语言服务器。 |
+| N3：reaction 补偿 | 跨信号分布式补偿（与 M23 单信号原子语义互补）。 |
+| N4：stc --watch | 监视 .ddl 文件变更自动重编 + 可选触发场景回归。 |
+
+本次不自动推进；等待下一步指令。

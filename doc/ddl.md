@@ -55,7 +55,7 @@ reaction {
 ## Syntax reference (EBNF)
 
 ```
-doc         = { signal | reaction | guard | fork | join }
+doc         = { signal | reaction | guard | fork | join | component | instantiate }
 
 signal      = "signal" IDENT
               "{" states_decl initial_decl { transition } "}"
@@ -81,6 +81,19 @@ guard       = "guard" IDENT "{" guard_expr "}"
 fork        = "fork" "{" { reaction_body } "}"
 
 join        = "join" IDENT "{" { reaction_body } "}"
+
+component   = "component" IDENT
+              "{" [ params_decl ] { port | signal | reaction | fork | join } "}"
+
+params_decl = "params" ":" "[" [ IDENT { "," IDENT } [ "," ] ] "]"
+
+port        = "port" direction IDENT "." IDENT [ "as" IDENT ]
+
+direction   = "in" | "out" | "inout"
+
+instantiate = "instantiate" IDENT "as" IDENT
+              "{" { IDENT "->" IDENT } "}"
+              [ "connect" "{" { IDENT "->" IDENT } "}" ]
 
 reaction_body = "when" IDENT "enters" IDENT "->" IDENT IDENT
                 [ "when" ( guard_expr | IDENT ) ]
@@ -152,6 +165,9 @@ unchanged.
 | `fork { ... }` (M44) block members          | `reactions[].join_group` = the block's auto name (`fork0`, `fork1`, …) |
 | `join <group> { ... }` (M44) block members  | `reactions[].requires` = `["<group>"]` |
 | `guard ID { G }` (M38)                      | no direct JSON field; inlined into each `reactions[].guard` that refs it |
+| `component C { ... }` (M45)                 | `components["C"]`: `params`, `ports`, `signals`, `transitions`, `reactions` |
+| `port out S.ST [as A]` (M45)                | `components[].ports[]`: `direction`, `signal`, `state`, `alias` |
+| `instantiate C as I with {...} connect {...}` (M45) | `instances[]`: `component`, `bindings`, `connections` |
 | (implicit)                                  | `version` = `"0.1"`                                        |
 
 Mapping rules:
@@ -379,6 +395,91 @@ Each `fork`/`join` block may carry a `when <guard>` guard and/or a
 The compiler lowers `fork`/`join` onto the `ReactionDef.join_group` and
 `ReactionDef.requires` fields. Because both fields are `#[serde(default)]`, the
 engine accepts topologies that omit them.
+
+## Sub-topology components (M45)
+
+A reusable **component** bundles signals, transitions, and reactions under a
+name, like the JSON `ComponentDef`. On top of M16's parameterized placeholders
+(`${param}`, bound at instantiation), a component can declare **ports** — named
+exposed reaction interfaces — that an instance wires to parent-level signals.
+
+```ddl
+component lockable {
+    params: [name]                       // optional; each `${param}` is bound on instantiation
+    port out lock.locked as locked        // expose signal `lock` state `locked`, aliased `locked`
+    port in  lock.unlocked               // no alias → addressed as `lock.unlocked`
+
+    signal lock {
+        states: [locked, unlocked]
+        initial: unlocked
+        on lock from unlocked -> locked
+        on unlock from locked -> unlocked
+    }
+}
+```
+
+Ports:
+
+- `port <direction> <signal>.<state> [as <alias>]` declares one.
+- **direction** is `in` (parent can trigger this signal), `out` (this signal's
+  state changes are visible to the parent) or `inout` (both). A port counts as
+  metadata for wiring; direction does not change runtime semantics.
+- Every string field — including a port's `signal`/`state` — may use
+  `${param}` placeholders.
+
+An **instantiation** creates a concrete copy of a component with its params
+bound and its ports wired to parent signals:
+
+```ddl
+instantiate lockable as door with { name -> door } connect { locked -> door }
+```
+
+- `instantiate <component> as <id> with { <param> -> <value>, ... }` binds the
+  component's declared params. Every declared param must be supplied (the same
+  rule as JSON `InstanceDef`).
+- `connect { <port> -> <parent_signal>, ... }` (optional) wires each named port
+  — by its alias, or by `<signal>.<state>` when it has no alias — to a
+  parent-level signal. During expansion the component-internal signal named by
+  the port is **renamed** to the connected parent signal everywhere inside the
+  instance (its signal id, its transitions, and any reaction referencing it).
+  That is how a component's exposed reaction interface becomes a parent
+  reaction: wire the port to a parent signal and write the parent reaction
+  against that signal.
+
+Rules:
+
+- A component name must be unique; duplicate ids are a compile-time error.
+- A component body holds `port`, `signal`, and `reaction` blocks. Fork/join
+  blocks are top-level only and cannot appear inside a component.
+- A connection to an undeclared port, a port whose signal/state does not exist
+  in the component, or the same port wired to two different targets is a
+  compile-time error.
+- When a component has no ports wired in an instance, expansion behaves exactly
+  like the pre-M45 M16 expansion (signal ids are param-substituted; no signal
+  is renamed). Param-only reuse keeps working unchanged.
+
+Example wiring a sub-topology into a parent:
+
+```ddl
+signal controller { states: [idle, alerted] initial: idle
+    on notify from idle -> alerted
+    on reset from alerted -> idle }
+
+component lockable {
+    port out lock.locked as locked
+    signal lock { states: [locked, unlocked] initial: unlocked
+        on lock from unlocked -> locked
+        on unlock from locked -> unlocked } }
+
+reaction { when door enters locked -> controller notify }
+
+instantiate lockable as door with {} connect { locked -> door }
+```
+
+After compiling, the component's internal `lock` signal is renamed to `door`,
+its `lock`/`unlock` transitions become `door`'s transitions, and the parent
+reaction `when door enters locked -> controller notify` cascades when the locked
+sub-topology is entered — the sub-topology's exposed port feeds the parent.
 
 ## Tool chain
 
