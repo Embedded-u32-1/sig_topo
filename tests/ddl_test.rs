@@ -597,3 +597,112 @@ fork {
     assert_eq!(engine.get_state("C").unwrap(), "c1");
 }
 
+// ---------------------------------------------------------------------------
+// M45: sub-topology component with ports + wired instantiation, end-to-end.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn sub_topology_component_via_ports_end_to_end() {
+    // A "lockable" sub-topology exposes its internal `lock.locked` state via an
+    // `out` port aliased `locked`. The parent (`house`) instantiates it and
+    // wires that port to the parent-level signal `door`. After compilation +
+    // expansion, the parent's own reaction may react to `door` directly — the
+    // component's exposed signal has been renamed into the parent namespace.
+    let ddl = r#"
+signal controller {
+    states: [idle, alerted]
+    initial: idle
+    on notify from idle -> alerted
+    on reset from alerted -> idle
+}
+
+component lockable {
+    port out lock.locked as locked
+    signal lock {
+        states: [locked, unlocked]
+        initial: unlocked
+        on lock from unlocked -> locked
+        on unlock from locked -> unlocked
+    }
+}
+
+reaction {
+    when door enters locked -> controller notify
+}
+
+instantiate lockable as door with {} connect { locked -> door }
+"#;
+
+    let schema = signal_topology::ddl::compile(ddl).expect("DDL should compile");
+    assert!(
+        schema.components.is_none(),
+        "compile() flattens components"
+    );
+    assert!(schema.instances.is_empty(), "compile() flattens instances");
+
+    let mut engine = TopologyEngine::from_schema(schema).expect("engine builds");
+
+    assert_eq!(engine.get_state("controller").unwrap(), "idle");
+    assert_eq!(engine.get_state("door").unwrap(), "unlocked");
+
+    // Lock the (wired) `door` signal via the component's `lock` transition.
+    engine
+        .send_event("door", "lock", None)
+        .expect("lock should succeed");
+    assert_eq!(engine.get_state("door").unwrap(), "locked");
+
+    // Parent reaction fires: door=locked -> controller notify -> alerted.
+    assert_eq!(
+        engine.get_state("controller").unwrap(),
+        "alerted",
+        "component's exposed signal should drive the parent reaction"
+    );
+
+    // Reset the controller independently; back to idle.
+    engine.send_event("controller", "reset", None).expect("reset");
+    assert_eq!(engine.get_state("controller").unwrap(), "idle");
+}
+
+#[test]
+fn sub_topology_internal_reaction_wired_to_parent_end_to_end() {
+    // A component's *internal* reaction targets an exposed port signal. After
+    // wiring, that reaction must fire against the parent signal it was wired
+    // to — the renamed-from identity.
+    let ddl = r#"
+signal audit {
+    states: [idle, noted]
+    initial: idle
+    on note from idle -> noted
+}
+
+component flag {
+    port out flag.set as flag_set
+    signal flag {
+        states: [clear, set]
+        initial: clear
+        on raise from clear -> set
+    }
+    reaction {
+        when flag enters set -> audit note
+    }
+}
+
+instantiate flag as alarm with {} connect { flag_set -> alarm }
+"#;
+
+    let mut engine = engine_from_ddl(ddl);
+
+    // Raising the wired `alarm` signal (the component's internal `flag`) sends
+    // `set` to `alarm`; the component's internal reaction reacts to
+    // `alarm.set` and cascades into `audit`.
+    engine
+        .send_event("alarm", "raise", None)
+        .expect("raise should succeed");
+    assert_eq!(engine.get_state("alarm").unwrap(), "set");
+    assert_eq!(
+        engine.get_state("audit").unwrap(),
+        "noted",
+        "wired internal reaction should cascade into the parent"
+    );
+}
+

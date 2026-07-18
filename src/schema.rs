@@ -34,10 +34,14 @@ pub struct TopologySchema {
 ///
 /// Every string field may contain `${param}` placeholders that are substituted
 /// when an instance supplies bindings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ComponentDef {
     /// Parameter names expected to be bound on instantiation.
     pub params: Vec<String>,
+    /// The component's exposed ports (reaction interfaces a parent can wire to).
+    /// Empty (the default) preserves the pre-M45 component behavior.
+    #[serde(default)]
+    pub ports: Vec<PortDef>,
     /// The component's signals.
     pub signals: Vec<SignalDef>,
     /// The component's transitions.
@@ -47,13 +51,67 @@ pub struct ComponentDef {
     pub reactions: Vec<ReactionDef>,
 }
 
+/// The direction of a component port, describing how the parent topology may
+/// interact with the exposed signal.
+///
+/// - `Out`: the component drives this signal; the parent may react to its state
+///   changes (the connected signal's reactions become visible to the parent).
+/// - `In`: the parent may trigger this signal.
+/// - `InOut`: both directions.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub enum PortDirection {
+    /// The parent can trigger this signal.
+    In,
+    /// This signal's state changes are visible to the parent.
+    Out,
+    /// Both directions.
+    InOut,
+}
+
+/// An exposed reaction interface on a component.
+///
+/// A port names a `(signal, state)` pair inside the component that the parent
+/// can wire to a parent-level signal via an `InstanceDef` connection. The
+/// optional `alias` is the stable name the parent uses to refer to this port
+/// (defaults to `<signal>.<state>` when absent).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PortDef {
+    /// How the parent may interact with this port.
+    pub direction: PortDirection,
+    /// The component-internal signal the port is exposed on (may contain
+    /// `${param}` placeholders).
+    pub signal: String,
+    /// The state on `signal` that the port exposes (may contain `${param}`).
+    pub state: String,
+    /// Stable name the parent uses in `ConnectionDef::port`. When `None`, the
+    /// port is addressed as `<signal>.<state>` (after param substitution).
+    pub alias: Option<String>,
+}
+
+/// A wire from a component port to a parent-level signal.
+///
+/// During expansion the component-internal signal named by the port is
+/// renamed to `target_signal`, so that the parent's reactions (and the
+/// component's own reactions) reference the parent-level signal directly.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ConnectionDef {
+    /// The port to wire, identified by its `alias` or by `<signal>.<state>`.
+    pub port: String,
+    /// The parent-level signal the port's signal is renamed to.
+    pub target_signal: String,
+}
+
 /// A concrete instantiation of a `ComponentDef`, with `params` bound to values.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct InstanceDef {
     /// The component name (must match a key in `TopologySchema::components`).
     pub component: String,
     /// Maps each parameter name to its concrete value.
     pub bindings: HashMap<String, String>,
+    /// Wires from this instance's component ports to parent-level signals.
+    /// Empty (the default) preserves the pre-M16 instantiation behavior.
+    #[serde(default)]
+    pub connections: Vec<ConnectionDef>,
 }
 
 /// A signal: a named state machine with a fixed set of states.

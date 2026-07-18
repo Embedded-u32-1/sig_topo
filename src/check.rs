@@ -348,6 +348,8 @@ mod tests {
             signals: vec![],
             reactions: vec![reaction_with_ref("order", Some("used"))],
             guards: vec![guard("used", "payload.amount <= 100"), guard("lonely", "payload.x == 1")],
+            components: vec![],
+            instantiates: vec![]
         };
 
         let warnings = check_ddl(&doc, &empty_schema());
@@ -371,6 +373,8 @@ mod tests {
             signals: vec![],
             reactions: vec![reaction_with_ref("order", Some("g1"))],
             guards: vec![guard("g1", "payload.amount <= 100"), guard("g2", "payload.amount <= 100")],
+            components: vec![],
+            instantiates: vec![]
         };
 
         let warnings = check_ddl(&doc, &empty_schema());
@@ -402,6 +406,8 @@ mod tests {
                 reaction_with_ref("order", Some("b")),
             ],
             guards: vec![guard("a", "payload.amount <= 100"), guard("b", "payload.amount > 0")],
+            components: vec![],
+            instantiates: vec![]
         };
 
         let warnings = check_ddl(&doc, &empty_schema());

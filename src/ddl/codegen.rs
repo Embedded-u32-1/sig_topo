@@ -6,9 +6,14 @@
 // one schema node, and guards pass through verbatim as `Option<String>`.
 
 use crate::error::EngineError;
-use crate::schema::{ActionBinding, ReactionDef, SignalDef, TopologySchema, TransitionDef};
+use crate::schema::{
+    ActionBinding, ComponentDef, InstanceDef, ReactionDef, SignalDef, TopologySchema,
+    TransitionDef,
+};
 
-use super::parser::{DdlDoc, TransDecl};
+use super::parser::{DdlDoc, InstantiateDecl, SignalDecl, TransDecl};
+
+use std::collections::HashMap;
 
 /// Emit a `TopologySchema` from a parsed DDL document.
 ///
@@ -16,10 +21,68 @@ use super::parser::{DdlDoc, TransDecl};
 /// evaluates them at cascade time and skips any reaction whose guard is false
 /// (see `engine::send_event_internal`, M32).
 pub fn emit(doc: DdlDoc) -> Result<TopologySchema, EngineError> {
-    let mut signals = Vec::with_capacity(doc.signals.len());
+    // Lower the top-level signals and their transitions.
+    let (signals, transitions) = emit_signals(doc.signals)?;
+
+    let reactions = doc
+        .reactions
+        .into_iter()
+        .map(emit_reaction)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // M45: lower each component declaration into a `ComponentDef`. Its signals,
+    // transitions and reactions are `${param}`-parameterized and expanded at
+    // instantiation time.
+    let mut components = HashMap::with_capacity(doc.components.len());
+    for comp in doc.components {
+        let (signals, transitions) = emit_signals(comp.signals)?;
+        let reactions = comp
+            .reactions
+            .into_iter()
+            .map(emit_reaction)
+            .collect::<Result<Vec<_>, _>>()?;
+        let component = ComponentDef {
+            params: comp.params,
+            ports: comp.ports,
+            signals,
+            transitions,
+            reactions,
+        };
+        components.insert(comp.id, component);
+    }
+
+    // M45: lower each instantiation into an `InstanceDef` (bindings + wiring).
+    let instances = doc
+        .instantiates
+        .into_iter()
+        .map(emit_instantiate)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(TopologySchema {
+        version: "0.1".to_string(),
+        signals,
+        transitions,
+        reactions,
+        components: if components.is_empty() {
+            None
+        } else {
+            Some(components)
+        },
+        instances,
+        includes: Vec::new(),
+    })
+}
+
+/// Lower a set of `SignalDecl`s (each carrying its transitions) into flat
+/// `SignalDef`s and `TransitionDef`s. Used for both the top-level body and the
+/// body of a component.
+fn emit_signals(
+    decls: Vec<SignalDecl>,
+) -> Result<(Vec<SignalDef>, Vec<TransitionDef>), EngineError> {
+    let mut signals = Vec::with_capacity(decls.len());
     let mut transitions = Vec::new();
 
-    for sig in doc.signals {
+    for sig in decls {
         signals.push(SignalDef {
             id: sig.id.clone(),
             initial_state: sig.initial,
@@ -35,20 +98,15 @@ pub fn emit(doc: DdlDoc) -> Result<TopologySchema, EngineError> {
         }
     }
 
-    let reactions = doc
-        .reactions
-        .into_iter()
-        .map(emit_reaction)
-        .collect::<Result<Vec<_>, _>>()?;
+    Ok((signals, transitions))
+}
 
-    Ok(TopologySchema {
-        version: "0.1".to_string(),
-        signals,
-        transitions,
-        reactions,
-        components: None,
-        instances: Vec::new(),
-        includes: Vec::new(),
+/// Lower an `InstantiateDecl` into an `InstanceDef`.
+fn emit_instantiate(inst: InstantiateDecl) -> Result<InstanceDef, EngineError> {
+    Ok(InstanceDef {
+        component: inst.component,
+        bindings: inst.bindings,
+        connections: inst.connections,
     })
 }
 
@@ -151,6 +209,8 @@ mod tests {
             }],
             reactions: vec![],
             guards: vec![],
+            components: vec![],
+            instantiates: vec![]
         }
     }
 
@@ -206,6 +266,8 @@ mod tests {
                 requires: vec![],
             }],
             guards: vec![],
+            components: vec![],
+            instantiates: vec![]
         })
         .unwrap();
 
@@ -236,6 +298,8 @@ mod tests {
                 requires: vec![],
             }],
             guards: vec![],
+            components: vec![],
+            instantiates: vec![]
         })
         .unwrap();
 
@@ -261,6 +325,8 @@ mod tests {
                 requires: vec![],
             }],
             guards: vec![],
+            components: vec![],
+            instantiates: vec![]
         })
         .unwrap();
 
@@ -289,6 +355,8 @@ mod tests {
                 requires: vec![],
             }],
             guards: vec![],
+            components: vec![],
+            instantiates: vec![]
         })
         .unwrap_err();
         assert!(err.to_string().contains("not valid JSON"), "got: {}", err);

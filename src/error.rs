@@ -82,6 +82,28 @@ pub enum EngineError {
     #[error("Invalid param reference '${param}' in component '{component}' (not in params list)")]
     InvalidParamRef { component: String, param: String },
 
+    /// A connection references a port that the component does not declare.
+    #[error("Connection references unknown port '{port}' on component '{component}'")]
+    UnknownPort { component: String, port: String },
+
+    /// Two connections on the same instance wire the same port to different
+    /// parent signals, which is ambiguous.
+    #[error("Port '{port}' on component '{component}' is wired to multiple targets")]
+    ConflictingPortConnection { component: String, port: String },
+
+    /// A port references a signal id that the component does not declare.
+    #[error("Port '{port}' on component '{component}' references unknown signal '{signal}'")]
+    PortUnknownSignal { component: String, port: String, signal: String },
+
+    /// A port references a state that is not a member of its signal's `states`.
+    #[error("Port '{port}' on component '{component}' references unknown state '{state}' for signal '{signal}'")]
+    PortUnknownState {
+        component: String,
+        port: String,
+        signal: String,
+        state: String,
+    },
+
     /// An `includes` entry could not be read or parsed.
     #[error("Include file not found: {0}")]
     IncludeNotFound(String),

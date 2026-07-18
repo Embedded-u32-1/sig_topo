@@ -1,6 +1,6 @@
 use signal_topology::schema::{
-    ActionBinding, ComponentDef, InstanceDef, ReactionDef, SignalDef, TopologySchema,
-    TransitionDef,
+    ActionBinding, ComponentDef, ConnectionDef, InstanceDef, PortDef, PortDirection, ReactionDef,
+    SignalDef, TopologySchema, TransitionDef,
 };
 use signal_topology::{expand, from_path, load_topology, EngineError, TopologyEngine};
 
@@ -20,6 +20,7 @@ fn signal(id: &str, initial: &str, states: &[&str]) -> SignalDef {
 /// `locked`/`unlocked`. Useful for exercising `${name}` in id + state names.
 fn lockable_component() -> ComponentDef {
     ComponentDef {
+        ports: vec![],
         params: vec!["name".to_string()],
         signals: vec![signal("${name}", "unlocked", &["locked", "unlocked"])],
         transitions: vec![
@@ -47,6 +48,7 @@ fn lockable_component() -> ComponentDef {
 /// A component carrying a reaction driven by `${kind}`.
 fn notify_component() -> ComponentDef {
     ComponentDef {
+        ports: vec![],
         params: vec!["src".to_string(), "kind".to_string()],
         signals: vec![signal("${kind}", "idle", &["idle", "done"])],
         transitions: vec![TransitionDef {
@@ -96,6 +98,7 @@ fn test_expand_single_instance_flattens_signals_and_transitions() {
     let schema = TopologySchema {
         components: Some(components),
         instances: vec![InstanceDef {
+            connections: vec![],
             component: "lockable".to_string(),
             bindings: HashMap::from([("name".to_string(), "door".to_string())]),
         }],
@@ -124,10 +127,12 @@ fn test_expand_same_component_twice_with_different_bindings() {
         components: Some(components),
         instances: vec![
             InstanceDef {
+                connections: vec![],
                 component: "lockable".to_string(),
                 bindings: HashMap::from([("name".to_string(), "door".to_string())]),
             },
             InstanceDef {
+                connections: vec![],
                 component: "lockable".to_string(),
                 bindings: HashMap::from([("name".to_string(), "window".to_string())]),
             },
@@ -156,6 +161,7 @@ fn test_expand_param_injected_into_state_names() {
     let schema = TopologySchema {
         components: Some(components),
         instances: vec![InstanceDef {
+            connections: vec![],
             component: "notify".to_string(),
             bindings: HashMap::from([
                 ("src".to_string(), "master".to_string()),
@@ -182,6 +188,7 @@ fn test_expand_missing_binding_returns_error() {
     let schema = TopologySchema {
         components: Some(components),
         instances: vec![InstanceDef {
+            connections: vec![],
             component: "lockable".to_string(),
             bindings: HashMap::new(),
         }],
@@ -199,6 +206,7 @@ fn test_expand_unknown_component_returns_error() {
     let schema = TopologySchema {
         components: Some(HashMap::new()),
         instances: vec![InstanceDef {
+            connections: vec![],
             component: "does_not_exist".to_string(),
             bindings: HashMap::new(),
         }],
@@ -221,10 +229,12 @@ fn test_expand_duplicate_signal_after_expand_returns_error() {
         components: Some(components),
         instances: vec![
             InstanceDef {
+                connections: vec![],
                 component: "lockable".to_string(),
                 bindings: HashMap::from([("name".to_string(), "door".to_string())]),
             },
             InstanceDef {
+                connections: vec![],
                 component: "lockable".to_string(),
                 bindings: HashMap::from([("name".to_string(), "door".to_string())]),
             },
@@ -258,6 +268,7 @@ fn test_expand_empty_instances_preserves_schema() {
 fn test_expand_invalid_param_ref_returns_error() {
     // Component references `${extra}` which is not declared in `params`.
     let bad = ComponentDef {
+        ports: vec![],
         params: vec!["name".to_string()],
         signals: vec![signal("${extra}", "a", &["a"])],
         transitions: vec![],
@@ -270,6 +281,7 @@ fn test_expand_invalid_param_ref_returns_error() {
     let schema = TopologySchema {
         components: Some(components),
         instances: vec![InstanceDef {
+            connections: vec![],
             component: "bad".to_string(),
             bindings: HashMap::from([("name".to_string(), "x".to_string())]),
         }],
@@ -295,10 +307,12 @@ fn test_end_to_end_expanded_component_runs_in_engine() {
         components: Some(components),
         instances: vec![
             InstanceDef {
+                connections: vec![],
                 component: "lockable".to_string(),
                 bindings: HashMap::from([("name".to_string(), "door".to_string())]),
             },
             InstanceDef {
+                connections: vec![],
                 component: "lockable".to_string(),
                 bindings: HashMap::from([("name".to_string(), "window".to_string())]),
             },
@@ -322,6 +336,219 @@ fn test_end_to_end_expanded_component_runs_in_engine() {
 
     let r = engine.send_event("door", "unlock", None).expect("unlock door");
     assert_eq!(r.to, "unlocked");
+}
+
+// ---------------------------------------------------------------------------
+// M45 — sub-topology composition with ports + wired connections.
+// ---------------------------------------------------------------------------
+
+/// A "lockable" component whose internal signal is `lock` (not param-driven).
+/// It exposes an `out` port on `lock.locked` aliased `locked`, so a parent can
+/// wire that exposed signal to any parent-level signal.
+fn lockable_port_component() -> ComponentDef {
+    ComponentDef {
+        params: vec![],
+        ports: vec![PortDef {
+            direction: PortDirection::Out,
+            signal: "lock".to_string(),
+            state: "locked".to_string(),
+            alias: Some("locked".to_string()),
+        }],
+        signals: vec![signal("lock", "unlocked", &["locked", "unlocked"])],
+        transitions: vec![
+            TransitionDef {
+                signal_id: "lock".to_string(),
+                from: "unlocked".to_string(),
+                event: "lock".to_string(),
+                to: "locked".to_string(),
+                actions: ActionBinding::default(),
+                guard: None,
+            },
+            TransitionDef {
+                signal_id: "lock".to_string(),
+                from: "locked".to_string(),
+                event: "unlock".to_string(),
+                to: "unlocked".to_string(),
+                actions: ActionBinding::default(),
+                guard: None,
+            },
+        ],
+        reactions: vec![],
+    }
+}
+
+/// A component whose internal reaction targets an exposed port signal. After
+/// wiring, that reaction must fire against the parent signal it was wired to.
+fn notify_port_component() -> ComponentDef {
+    ComponentDef {
+        params: vec![],
+        ports: vec![PortDef {
+            direction: PortDirection::Out,
+            signal: "flag".to_string(),
+            state: "set".to_string(),
+            alias: Some("flag_set".to_string()),
+        }],
+        signals: vec![signal("flag", "clear", &["clear", "set"])],
+        transitions: vec![TransitionDef {
+            signal_id: "flag".to_string(),
+            from: "clear".to_string(),
+            event: "raise".to_string(),
+            to: "set".to_string(),
+            actions: ActionBinding::default(),
+            guard: None,
+        }],
+        reactions: vec![ReactionDef {
+            from_signal: "flag".to_string(),
+            from_state: "set".to_string(),
+            to_signal: "audit".to_string(),
+            event: "note".to_string(),
+            payload: None,
+            guard: None,
+            join_group: None,
+            requires: Vec::new(),
+        }],
+    }
+}
+
+#[test]
+fn test_expand_connection_remaps_port_signal_to_parent() {
+    let mut components = HashMap::new();
+    components.insert("lockable".to_string(), lockable_port_component());
+
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![InstanceDef {
+            component: "lockable".to_string(),
+            bindings: HashMap::new(),
+            connections: vec![ConnectionDef {
+                port: "locked".to_string(),
+                target_signal: "door".to_string(),
+            }],
+        }],
+        ..base_schema()
+    };
+
+    let flat = expand(schema).expect("expand should succeed");
+
+    // The internal signal `lock` is renamed to the wired parent signal `door`.
+    let ids: Vec<&str> = flat.signals.iter().map(|s| s.id.as_str()).collect();
+    assert!(ids.contains(&"door"), "expected 'door' in signals, got {:?}", ids);
+    assert!(!ids.contains(&"lock"), "internal 'lock' should be renamed away");
+    assert_eq!(flat.signals.len(), 1);
+
+    // The transition that was on `door` (wire target) now references `door`.
+    assert!(flat
+        .transitions
+        .iter()
+        .all(|t| t.signal_id == "door"), "all transitions should target 'door'");
+    assert_eq!(flat.transitions.len(), 2);
+}
+
+#[test]
+fn test_expand_connection_remaps_internal_reaction_to_parent_signal() {
+    let mut components = HashMap::new();
+    components.insert("notify".to_string(), notify_port_component());
+
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![InstanceDef {
+            component: "notify".to_string(),
+            bindings: HashMap::new(),
+            connections: vec![ConnectionDef {
+                port: "flag_set".to_string(),
+                target_signal: "alarm".to_string(),
+            }],
+        }],
+        ..base_schema()
+    };
+
+    let flat = expand(schema).expect("expand should succeed");
+
+    // Internal signal `flag` renamed to the wired parent signal `alarm`.
+    let ids: Vec<&str> = flat.signals.iter().map(|s| s.id.as_str()).collect();
+    assert!(ids.contains(&"alarm"), "expected 'alarm', got {:?}", ids);
+    assert!(!ids.contains(&"flag"));
+
+    // The component's internal reaction `flag.set -> audit note` must now read
+    // `alarm.set -> audit note`, i.e. its from_signal became the parent signal.
+    let r = flat
+        .reactions
+        .iter()
+        .find(|r| r.event == "note")
+        .expect("reaction should survive expansion");
+    assert_eq!(r.from_signal, "alarm");
+    assert_eq!(r.from_state, "set");
+    assert_eq!(r.to_signal, "audit");
+}
+
+#[test]
+fn test_expand_connection_port_not_found_is_error() {
+    let mut components = HashMap::new();
+    components.insert("lockable".to_string(), lockable_port_component());
+
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![InstanceDef {
+            component: "lockable".to_string(),
+            bindings: HashMap::new(),
+            connections: vec![ConnectionDef {
+                port: "does_not_exist".to_string(),
+                target_signal: "door".to_string(),
+            }],
+        }],
+        ..base_schema()
+    };
+
+    let err = expand(schema).expect_err("unknown port should error");
+    assert!(
+        matches!(err, EngineError::UnknownPort { port, .. } if port == "does_not_exist")
+    );
+}
+
+#[test]
+fn test_expand_connection_port_by_signal_state() {
+    // A port without an alias is addressed as `<signal>.<state>`.
+    let mut components = HashMap::new();
+    components.insert(
+        "c".to_string(),
+        ComponentDef {
+            params: vec![],
+            ports: vec![PortDef {
+                direction: PortDirection::Out,
+                signal: "inner".to_string(),
+                state: "go".to_string(),
+                alias: None,
+            }],
+            signals: vec![signal("inner", "a", &["a", "go"])],
+            transitions: vec![TransitionDef {
+                signal_id: "inner".to_string(),
+                from: "a".to_string(),
+                event: "step".to_string(),
+                to: "go".to_string(),
+                actions: ActionBinding::default(),
+                guard: None,
+            }],
+            reactions: vec![],
+        },
+    );
+
+    let schema = TopologySchema {
+        components: Some(components),
+        instances: vec![InstanceDef {
+            component: "c".to_string(),
+            bindings: HashMap::new(),
+            connections: vec![ConnectionDef {
+                port: "inner.go".to_string(),
+                target_signal: "outer".to_string(),
+            }],
+        }],
+        ..base_schema()
+    };
+
+    let flat = expand(schema).expect("expand should succeed");
+    let ids: Vec<&str> = flat.signals.iter().map(|s| s.id.as_str()).collect();
+    assert!(ids.contains(&"outer"));
+    assert!(flat.transitions.iter().all(|t| t.signal_id == "outer"));
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +708,7 @@ fn test_load_topology_then_engine_end_to_end() {
 /// being re-interpreted as another param.
 fn value_with_nested_ref_component() -> ComponentDef {
     ComponentDef {
+        ports: vec![],
         params: vec!["name".to_string(), "kind".to_string()],
         signals: vec![SignalDef {
             // value of `name` is "${kind}" — after substitution the signal id
@@ -502,6 +730,7 @@ fn test_expand_does_not_rescan_substituted_text() {
     let schema = TopologySchema {
         components: Some(components),
         instances: vec![InstanceDef {
+            connections: vec![],
             component: "v".to_string(),
             bindings: HashMap::from([
                 ("name".to_string(), "${kind}".to_string()),
@@ -527,6 +756,7 @@ fn test_expand_substitution_is_deterministic() {
         TopologySchema {
             components: Some(components),
             instances: vec![InstanceDef {
+                connections: vec![],
                 component: "v".to_string(),
                 bindings: HashMap::from([
                     ("name".to_string(), "${kind}".to_string()),
@@ -554,6 +784,7 @@ fn test_expand_missing_binding_reports_component_name() {
     let schema = TopologySchema {
         components: Some(components),
         instances: vec![InstanceDef {
+            connections: vec![],
             component: "lockable".to_string(),
             bindings: HashMap::new(), // missing `name`
         }],

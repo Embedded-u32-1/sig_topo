@@ -11,10 +11,14 @@
 
 use super::lexer::Token;
 use super::TokenKind;
+use crate::schema::{ConnectionDef, PortDef, PortDirection};
+
+use std::collections::HashMap;
 
 /// A parsed DDL document: one signal declaration per `signal` block plus the
 /// cross-signal `reaction` blocks and named `guard` declarations that follow.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(test, derive(Default))]
 pub struct DdlDoc {
     /// The declared signals, in source order.
     pub signals: Vec<SignalDecl>,
@@ -22,6 +26,10 @@ pub struct DdlDoc {
     pub reactions: Vec<ReactionDecl>,
     /// The top-level guard declarations, in source order.
     pub guards: Vec<GuardDecl>,
+    /// M45: the declared components, in source order.
+    pub components: Vec<ComponentDecl>,
+    /// M45: the component instantiations, in source order.
+    pub instantiates: Vec<InstantiateDecl>,
 }
 
 /// A single `signal` declaration: its id, state space, initial state and the
@@ -106,6 +114,51 @@ pub struct ReactionDecl {
     /// declared inside a `join <group> { ... }` block. Empty when the reaction
     /// has no dependency (the pre-M44 default).
     pub requires: Vec<String>,
+}
+
+/// M45: a reusable sub-topology component declaration.
+///
+/// A component bundles signals, transitions, reactions and (new) ports under a
+/// name. The optional `params` lets every string field use `${param}`
+/// placeholders; they are bound when the component is instantiated. `ports` are
+/// the exposed reaction interfaces an instance may wire to parent signals.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComponentDecl {
+    /// The component's name (becomes the key in `TopologySchema::components`).
+    pub id: String,
+    /// Parameter names expected to be bound on instantiation.
+    pub params: Vec<String>,
+    /// The component's exposed ports, in source order.
+    pub ports: Vec<PortDef>,
+    /// The component's signals (carrying their transitions).
+    pub signals: Vec<SignalDecl>,
+    /// The component's reactions (cross-signal cascades declared inside it).
+    pub reactions: Vec<ReactionDecl>,
+}
+
+/// M45: the unresolved form of a component during parsing — its reactions are
+/// still `RawReaction`s so `parse_doc` can resolve guard-id references against
+/// the top-level guard declarations (which may be declared later in the
+/// source). `DdlDoc::components` carries the resolved `ComponentDecl`.
+#[derive(Debug, Clone, PartialEq)]
+struct ComponentDeclRaw {
+    id: String,
+    pub params: Vec<String>,
+    pub ports: Vec<PortDef>,
+    pub signals: Vec<SignalDecl>,
+    pub raw_reactions: Vec<RawReaction>,
+}
+
+/// M45: a concrete instantiation of a component with bound params and port
+/// wiring.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstantiateDecl {
+    /// The component name (must match a `ComponentDecl::id`).
+    pub component: String,
+    /// Maps each parameter name to its concrete value.
+    pub bindings: HashMap<String, String>,
+    /// Wires from the instance's component ports to parent-level signals.
+    pub connections: Vec<ConnectionDef>,
 }
 
 /// A top-level `guard <id> { <expr> }` declaration: a named guard expression
@@ -213,9 +266,15 @@ impl<'a> Parser<'a> {
         let mut signals = Vec::new();
         let mut raw_reactions = Vec::new();
         let mut guards = Vec::new();
+        // M45: components are parsed into an unresolved form (raw reactions)
+        // so guard-id references can be resolved after the full sweep, exactly
+        // like top-level reactions.
+        let mut raw_components = Vec::new();
+        let mut instantiates = Vec::new();
 
         let mut seen_signals = std::collections::HashSet::new();
         let mut seen_guard_ids = std::collections::HashSet::new();
+        let mut seen_component_ids = std::collections::HashSet::new();
 
         // M44: fork groups are auto-named (`fork0`, `fork1`, ...) in source
         // order. Track the names we define and the ones `join` references so we
@@ -240,10 +299,16 @@ impl<'a> Parser<'a> {
                     let block = self.parse_join_block(&mut join_group_refs)?;
                     raw_reactions.extend(block);
                 }
+                TokenKind::Component => {
+                    raw_components.push(self.parse_component(&mut seen_component_ids)?)
+                }
+                TokenKind::Instantiate => {
+                    instantiates.push(self.parse_instantiate()?)
+                }
                 _ => {
                     let t = self.peek();
                     return Err(format!(
-                        "line {} col {}: expected 'signal', 'reaction', 'guard', 'fork' or 'join', found {:?}",
+                        "line {} col {}: expected 'signal', 'reaction', 'guard', 'fork', 'join', 'component' or 'instantiate', found {:?}",
                         t.line, t.col, t.kind
                     ));
                 }
@@ -269,40 +334,65 @@ impl<'a> Parser<'a> {
         // Resolve guard references. A reaction written as `when <id>` picks up
         // the named top-level guard's expression verbatim; this two-pass lets a
         // reaction reference a guard declared later in the source. A reference
-        // to an unknown id is a parse error.
+        // to an unknown id is a parse error. The same resolution applies to
+        // reactions declared inside components (M45).
         let guard_map: std::collections::HashMap<String, String> = guards
             .iter()
             .map(|g| (g.id.clone(), g.expr.clone()))
             .collect();
+
+        // M39/M45: capture whether each reaction's guard is a reference to a
+        // top-level guard id so check_ddl can tell which templates are actually
+        // used. The expanded expression text lives in `guard`.
+        fn resolve_reaction(
+            r: RawReaction,
+            guard_map: &std::collections::HashMap<String, String>,
+        ) -> Result<ReactionDecl, String> {
+            let (guard, guard_ref) = match r.guard {
+                None => (None, None),
+                Some(RawGuard::Lit(s)) => (Some(s), None),
+                Some(RawGuard::Ref(id)) => {
+                    let expr = guard_map.get(&id).cloned().ok_or_else(|| {
+                        format!(
+                            "undefined guard '{}' referenced in reaction ({} enters {})",
+                            id, r.from_signal, r.from_state
+                        )
+                    })?;
+                    (Some(expr), Some(id))
+                }
+            };
+            Ok(ReactionDecl {
+                from_signal: r.from_signal,
+                from_state: r.from_state,
+                to_signal: r.to_signal,
+                event: r.event,
+                guard,
+                guard_ref,
+                payload: r.payload,
+                join_group: r.join_group,
+                requires: r.requires,
+            })
+        }
+
         let reactions = raw_reactions
             .into_iter()
-            .map(|r| {
-                // M39: capture whether the reaction's guard is a reference to a
-                // top-level guard id so check_ddl can tell which templates are
-                // actually used. The expanded expression text lives in `guard`.
-                let (guard, guard_ref) = match r.guard {
-                    None => (None, None),
-                    Some(RawGuard::Lit(s)) => (Some(s), None),
-                    Some(RawGuard::Ref(id)) => {
-                        let expr = guard_map.get(&id).cloned().ok_or_else(|| {
-                            format!(
-                                "undefined guard '{}' referenced in reaction ({} enters {})",
-                                id, r.from_signal, r.from_state
-                            )
-                        })?;
-                        (Some(expr), Some(id))
-                    }
-                };
-                Ok(ReactionDecl {
-                    from_signal: r.from_signal,
-                    from_state: r.from_state,
-                    to_signal: r.to_signal,
-                    event: r.event,
-                    guard,
-                    guard_ref,
-                    payload: r.payload,
-                    join_group: r.join_group,
-                    requires: r.requires,
+            .map(|r| resolve_reaction(r, &guard_map))
+            .collect::<Result<Vec<_>, String>>()?;
+
+        let components = raw_components
+            .into_iter()
+            .map(|raw| {
+                let reactions = raw
+                    .raw_reactions
+                    .into_iter()
+                    .map(|r| resolve_reaction(r, &guard_map))
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok(ComponentDecl {
+                    id: raw.id,
+                    params: raw.params,
+                    ports: raw.ports,
+                    signals: raw.signals,
+                    reactions,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -311,6 +401,8 @@ impl<'a> Parser<'a> {
             signals,
             reactions,
             guards,
+            components,
+            instantiates,
         })
     }
 
@@ -693,6 +785,205 @@ impl<'a> Parser<'a> {
         Ok(GuardDecl { id, expr })
     }
 
+    /// Parse a `component <id> { ... }` block: its params, ports, signals and
+    /// reactions. Its body mirrors the top-level doc structure but additionally
+    // allows `params:` and `port` declarations.
+    fn parse_component(
+        &mut self,
+        seen: &mut std::collections::HashSet<String>,
+    ) -> Result<ComponentDeclRaw, String> {
+        self.expect_keyword(TokenKind::Component)?;
+
+        let (id, id_tok) = self.expect_any_ident()?;
+        if !seen.insert(id.clone()) {
+            return Err(format!(
+                "line {} col {}: duplicate component '{}'",
+                id_tok.line, id_tok.col, id
+            ));
+        }
+
+        self.expect_keyword(TokenKind::LBrace)?;
+
+        // `params: [a, b]` is the first (optional) declaration.
+        let mut params = Vec::new();
+        if matches!(self.peek().kind, TokenKind::Params) {
+            self.advance();
+            self.expect_keyword(TokenKind::Colon)?;
+            params = self.parse_state_list()?;
+        }
+
+        let mut ports = Vec::new();
+        let mut signals = Vec::new();
+        let mut raw_reactions = Vec::new();
+        let mut seen_signals = std::collections::HashSet::new();
+
+        // M45: a component body is a self-contained sub-topology made of ports,
+        // signals and reactions. Fork/join workflow blocks live at the top
+        // level only; they are rejected here with a clear error.
+        loop {
+            match self.peek().kind {
+                TokenKind::Port => ports.push(self.parse_port()?),
+                TokenKind::Signal => signals.push(self.parse_signal(&mut seen_signals)?),
+                TokenKind::Reaction => raw_reactions.push(self.parse_reaction_raw()?),
+                TokenKind::RBrace => {
+                    self.advance();
+                    break;
+                }
+                TokenKind::Fork | TokenKind::Join => {
+                    return Err(format!(
+                        "line {} col {}: fork/join blocks are top-level only and cannot appear inside a component",
+                        self.peek().line, self.peek().col
+                    ));
+                }
+                TokenKind::Eof => {
+                    return Err(format!(
+                        "line {} col {}: unterminated component '{}'",
+                        self.peek().line, self.peek().col, id
+                    ));
+                }
+                _ => {
+                    let t = self.peek();
+                    return Err(format!(
+                        "line {} col {}: expected 'port', 'signal', 'reaction' or '}}' in component, found {:?}",
+                        t.line, t.col, t.kind
+                    ));
+                }
+            }
+        }
+
+        Ok(ComponentDeclRaw {
+            id,
+            params,
+            ports,
+            signals,
+            raw_reactions,
+        })
+    }
+
+    /// Parse a single `port <direction> <signal>.<state> [as <alias>]`
+    /// declaration inside a component block. Direction is one of `in`, `out`,
+    /// `inout`; it is read contextually (these words are not reserved
+    /// globally) so they remain usable as identifiers elsewhere.
+    fn parse_port(&mut self) -> Result<PortDef, String> {
+        self.expect_keyword(TokenKind::Port)?;
+
+        let (dir_s, dir_tok) = self.expect_any_ident()?;
+        let direction = match dir_s.as_str() {
+            "in" => PortDirection::In,
+            "out" => PortDirection::Out,
+            "inout" => PortDirection::InOut,
+            other => {
+                return Err(format!(
+                    "line {} col {}: expected port direction 'in', 'out' or 'inout', found '{}'",
+                    dir_tok.line, dir_tok.col, other
+                ));
+            }
+        };
+
+        let (signal, _) = self.expect_any_ident()?;
+        self.expect_keyword(TokenKind::Dot)?;
+        let (state, _) = self.expect_any_ident()?;
+
+        let alias = if matches!(self.peek().kind, TokenKind::As) {
+            self.advance();
+            let (alias, _) = self.expect_any_ident()?;
+            Some(alias)
+        } else {
+            None
+        };
+
+        Ok(PortDef {
+            direction,
+            signal,
+            state,
+            alias,
+        })
+    }
+
+    /// Parse an `instantiate <component> as <id> with { ... } [connect { ... }]`
+    /// statement. Bindings map params to values; connections wire component
+    // ports to parent-level signals.
+    fn parse_instantiate(&mut self) -> Result<InstantiateDecl, String> {
+        self.expect_keyword(TokenKind::Instantiate)?;
+
+        let (component, _) = self.expect_any_ident()?;
+        self.expect_keyword(TokenKind::As)?;
+        let (_id, _) = self.expect_any_ident()?;
+
+        self.expect_keyword(TokenKind::With)?;
+        let bindings = self.parse_binding_map()?;
+
+        let connections = if matches!(self.peek().kind, TokenKind::Connect) {
+            self.advance();
+            self.parse_connection_map()?
+        } else {
+            Vec::new()
+        };
+
+        Ok(InstantiateDecl {
+            component,
+            bindings,
+            connections,
+        })
+    }
+
+    /// Parse a comma-separated `{ a -> b, c -> d }` map of identifier pairs,
+    /// used for both instantiation bindings and port connections. Trailing
+    /// commas are allowed.
+    fn parse_binding_map(&mut self) -> Result<HashMap<String, String>, String> {
+        self.expect_keyword(TokenKind::LBrace)?;
+        let mut map = HashMap::new();
+        if !matches!(self.peek().kind, TokenKind::RBrace) {
+            let (key, _) = self.expect_any_ident()?;
+            self.expect_keyword(TokenKind::Arrow)?;
+            let (value, _) = self.expect_any_ident()?;
+            map.insert(key, value);
+            while matches!(self.peek().kind, TokenKind::Comma) {
+                self.advance();
+                if matches!(self.peek().kind, TokenKind::RBrace) {
+                    break;
+                }
+                let (key, _) = self.expect_any_ident()?;
+                self.expect_keyword(TokenKind::Arrow)?;
+                let (value, _) = self.expect_any_ident()?;
+                map.insert(key, value);
+            }
+        }
+        self.expect_keyword(TokenKind::RBrace)?;
+        Ok(map)
+    }
+
+    /// Parse a comma-separated `{ port -> signal, ... }` connection map. Each
+    /// entry wires the named component port to a parent-level signal.
+    fn parse_connection_map(&mut self) -> Result<Vec<ConnectionDef>, String> {
+        self.expect_keyword(TokenKind::LBrace)?;
+        let mut conns = Vec::new();
+        if !matches!(self.peek().kind, TokenKind::RBrace) {
+            let (port, _) = self.expect_any_ident()?;
+            self.expect_keyword(TokenKind::Arrow)?;
+            let (target, _) = self.expect_any_ident()?;
+            conns.push(ConnectionDef {
+                port,
+                target_signal: target,
+            });
+            while matches!(self.peek().kind, TokenKind::Comma) {
+                self.advance();
+                if matches!(self.peek().kind, TokenKind::RBrace) {
+                    break;
+                }
+                let (port, _) = self.expect_any_ident()?;
+                self.expect_keyword(TokenKind::Arrow)?;
+                let (target, _) = self.expect_any_ident()?;
+                conns.push(ConnectionDef {
+                    port,
+                    target_signal: target,
+                });
+            }
+        }
+        self.expect_keyword(TokenKind::RBrace)?;
+        Ok(conns)
+    }
+
     /// Classify a reaction's `when` clause as either a literal guard
     /// expression or a guard-id reference. A bare identifier (a single IDENT
     /// token before the terminator) is treated as a reference; anything else
@@ -924,7 +1215,7 @@ signal s {
         let err = src_to_doc("bogus {}").unwrap_err();
         assert!(err.contains("line 1"), "got: {}", err);
         assert!(
-            err.contains("expected 'signal', 'reaction', 'guard', 'fork' or 'join'"),
+            err.contains("expected 'signal', 'reaction', 'guard', 'fork', 'join', 'component' or 'instantiate'"),
             "got: {}",
             err
         );
@@ -1255,5 +1546,123 @@ guard g {
         )
         .unwrap_err();
         assert!(err.contains("duplicate guard 'g'"), "got: {}", err);
+    }
+
+    // --- sub-topology components (M45) ---
+
+    #[test]
+    fn parse_component_with_ports() {
+        let doc = src_to_doc(
+            r#"
+component lockable {
+    params: [name]
+    port out lock.locked as locked
+    port in lock.unlocked
+    signal lock {
+        states: [locked, unlocked]
+        initial: unlocked
+        on lock from unlocked -> locked
+        on unlock from locked -> unlocked
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(doc.components.len(), 1);
+        let c = &doc.components[0];
+        assert_eq!(c.id, "lockable");
+        assert_eq!(c.params, vec!["name"]);
+        assert_eq!(c.ports.len(), 2);
+
+        let p0 = &c.ports[0];
+        assert_eq!(p0.direction, crate::schema::PortDirection::Out);
+        assert_eq!(p0.signal, "lock");
+        assert_eq!(p0.state, "locked");
+        assert_eq!(p0.alias, Some("locked".to_string()));
+
+        let p1 = &c.ports[1];
+        assert_eq!(p1.direction, crate::schema::PortDirection::In);
+        assert_eq!(p1.state, "unlocked");
+        assert!(p1.alias.is_none());
+    }
+
+    #[test]
+    fn parse_instantiate_with_bindings_and_connections() {
+        let doc = src_to_doc(
+            r#"
+component lockable {
+    params: [name]
+    port out lock.locked as locked
+    signal lock {
+        states: [locked, unlocked]
+        initial: unlocked
+        on lock from unlocked -> locked
+    }
+}
+
+instantiate lockable as door with { name -> door } connect { locked -> front }
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(doc.instantiates.len(), 1);
+        let inst = &doc.instantiates[0];
+        assert_eq!(inst.component, "lockable");
+        assert_eq!(inst.bindings.get("name").unwrap(), "door");
+        assert_eq!(inst.connections.len(), 1);
+        assert_eq!(inst.connections[0].port, "locked");
+        assert_eq!(inst.connections[0].target_signal, "front");
+    }
+
+    #[test]
+    fn parse_port_direction_inout() {
+        let doc = src_to_doc(
+            r#"
+component c {
+    params: [name]
+    port inout lock.locked
+    signal lock { states: [locked, unlocked] initial: unlocked on lock from unlocked -> locked }
+}
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            doc.components[0].ports[0].direction,
+            crate::schema::PortDirection::InOut
+        );
+    }
+
+    #[test]
+    fn parse_duplicate_component_id_is_error() {
+        let err = src_to_doc(
+            r#"
+component dup {
+    params: [name]
+    signal lock { states: [locked] initial: locked }
+}
+component dup {
+    params: [name]
+    signal lock { states: [locked] initial: locked }
+}
+"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("duplicate component 'dup'"), "got: {}", err);
+    }
+
+    #[test]
+    fn parse_port_unknown_direction_is_error() {
+        let err = src_to_doc(
+            r#"
+component c {
+    params: [name]
+    port sideways lock.locked
+    signal lock { states: [locked] initial: locked }
+}
+"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("expected port direction"), "got: {}", err);
     }
 }

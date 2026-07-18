@@ -47,6 +47,8 @@ pub enum TokenKind {
     On,
     From,
     To,
+    // M45: component parameter list (`params: [a, b]`).
+    Params,
     When,
     Reaction,
     Enters,
@@ -58,6 +60,12 @@ pub enum TokenKind {
     // M44: fork/join workflow blocks.
     Fork,
     Join,
+    // M45: sub-topology components with ports + instantiation wiring.
+    Component,
+    Port,
+    Instantiate,
+    Connect,
+    As,
 
     // Guard expression keywords.
     And,
@@ -100,7 +108,12 @@ pub fn compile(src: &str) -> Result<TopologySchema, EngineError> {
     let tokens = tokenize(src).map_err(EngineError::ParseError)?;
     let doc = parse(&tokens, src).map_err(EngineError::ParseError)?;
     let schema = codegen::emit(doc)?;
-    Ok(schema)
+    // M45: a DDL document may declare components and instantiate them. Expand
+    // the parameterized components into a flat, runnable topology so callers
+    // get a schema ready for the engine (and `stc` emits flat JSON). When the
+    // document has no instances this is a no-op pass-through, so legacy DDL is
+    // unchanged.
+    crate::compose::expand(schema)
 }
 
 /// Compile DDL source into both a `TopologySchema` and the parsed `DdlDoc` AST.
@@ -114,5 +127,6 @@ pub fn compile_full(src: &str) -> Result<(TopologySchema, DdlDoc), EngineError> 
     let tokens = tokenize(src).map_err(EngineError::ParseError)?;
     let doc = parse(&tokens, src).map_err(EngineError::ParseError)?;
     let schema = codegen::emit(doc.clone())?;
+    let schema = crate::compose::expand(schema)?;
     Ok((schema, doc))
 }

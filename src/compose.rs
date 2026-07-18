@@ -3,7 +3,8 @@
 
 use crate::error::EngineError;
 use crate::schema::{
-    ActionBinding, ComponentDef, ReactionDef, SignalDef, TopologySchema, TransitionDef,
+    ActionBinding, ComponentDef, ConnectionDef, PortDef, ReactionDef, SignalDef, TopologySchema,
+    TransitionDef,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -39,14 +40,35 @@ pub fn expand(schema: TopologySchema) -> Result<TopologySchema, EngineError> {
         // Validate bindings: each declared param must be supplied.
         let bound = check_bindings(component, &instance.bindings, &instance.component)?;
 
+        // M45: build a signal remap from the instance's port connections. Each
+        // connection wires a component port to a parent-level signal — the
+        // component-internal signal named by the port is renamed to the parent
+        // signal throughout this instance (signals, transitions, reactions).
+        let remap = resolve_connections(component, &instance.connections, &bound, &instance.component)?;
+
         for sig in &component.signals {
-            out_signals.push(expand_signal(sig, &instance.component, component, &bound)?);
+            let mut expanded = expand_signal(sig, &instance.component, component, &bound)?;
+            if let Some(target) = remap.get(&expanded.id) {
+                expanded.id = target.clone();
+            }
+            out_signals.push(expanded);
         }
         for trans in &component.transitions {
-            out_transitions.push(expand_transition(trans, &instance.component, component, &bound)?);
+            let mut expanded = expand_transition(trans, &instance.component, component, &bound)?;
+            if let Some(target) = remap.get(&expanded.signal_id) {
+                expanded.signal_id = target.clone();
+            }
+            out_transitions.push(expanded);
         }
         for reaction in &component.reactions {
-            out_reactions.push(expand_reaction(reaction, &instance.component, component, &bound)?);
+            let mut expanded = expand_reaction(reaction, &instance.component, component, &bound)?;
+            if let Some(target) = remap.get(&expanded.from_signal) {
+                expanded.from_signal = target.clone();
+            }
+            if let Some(target) = remap.get(&expanded.to_signal) {
+                expanded.to_signal = target.clone();
+            }
+            out_reactions.push(expanded);
         }
     }
 
@@ -179,6 +201,85 @@ fn check_bindings(
     Ok(bound)
 }
 
+/// Resolve an instance's port connections into a signal-remap table.
+///
+/// Each `ConnectionDef` names a port (by its alias or by `<signal>.<state>`)
+/// and a parent-level signal to wire it to. After param substitution, the
+/// port's `signal` must reference a signal the component actually declares, and
+/// its `state` must be a member of that signal. The returned map sends the
+/// concrete internal signal id to the concrete parent signal it is renamed to.
+///
+/// Validation:
+/// - every connection references a port the component declares;
+/// - the port references a real (signal, state) pair of the component;
+/// - a port is never wired to two different parent signals.
+fn resolve_connections(
+    component: &ComponentDef,
+    connections: &[ConnectionDef],
+    bound: &HashMap<String, String>,
+    owner: &str,
+) -> Result<HashMap<String, String>, EngineError> {
+    // Internal signals, post param-substitution, with their concrete states.
+    let signals: HashMap<String, Vec<String>> = component
+        .signals
+        .iter()
+        .map(|s| (subst(&s.id, bound), subst_vec(&s.states, bound)))
+        .collect();
+
+    let mut remap = HashMap::new();
+    for conn in connections {
+        let port = component
+            .ports
+            .iter()
+            .find(|p| port_name(p, bound) == conn.port)
+            .ok_or_else(|| EngineError::UnknownPort {
+                component: owner.to_string(),
+                port: conn.port.clone(),
+            })?;
+
+        let signal_id = subst(&port.signal, bound);
+        let state = subst(&port.state, bound);
+        let states = signals.get(&signal_id).ok_or_else(|| {
+            EngineError::PortUnknownSignal {
+                component: owner.to_string(),
+                port: conn.port.clone(),
+                signal: signal_id.clone(),
+            }
+        })?;
+        if !states.contains(&state) {
+            return Err(EngineError::PortUnknownState {
+                component: owner.to_string(),
+                port: conn.port.clone(),
+                signal: signal_id.clone(),
+                state,
+            });
+        }
+
+        let target = subst(&conn.target_signal, bound);
+        match remap.get(&signal_id) {
+            Some(existing) if existing != &target => {
+                return Err(EngineError::ConflictingPortConnection {
+                    component: owner.to_string(),
+                    port: conn.port.clone(),
+                });
+            }
+            _ => {
+                remap.insert(signal_id, target);
+            }
+        }
+    }
+    Ok(remap)
+}
+
+/// The name a connection uses to address a port: its `alias` if present, else
+/// `<signal>.<state>` (both already param-substituted).
+fn port_name(port: &PortDef, bound: &HashMap<String, String>) -> String {
+    if let Some(alias) = &port.alias {
+        return alias.clone();
+    }
+    format!("{}.{}", subst(&port.signal, bound), subst(&port.state, bound))
+}
+
 /// Expand a signal's string fields, validating leftover `${...}` refs.
 fn expand_signal(
     sig: &SignalDef,
@@ -269,6 +370,11 @@ fn subst(s: &str, bound: &HashMap<String, String>) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Like `subst`, but for a `Vec<String>`.
+fn subst_vec(items: &[String], bound: &HashMap<String, String>) -> Vec<String> {
+    items.iter().map(|s| subst(s, bound)).collect()
 }
 
 /// Like `subst`, but after substitution an error is raised if a `${xxx}`
