@@ -1,0 +1,13 @@
+{
+  "expected_final_states": {
+    "machine": "idle",
+    "audit": "noted"
+  },
+  "expected_guard_blocked": [1],
+  "events": [
+    { "signal_id": "machine", "event": "start" },
+    { "signal_id": "machine", "event": "fault", "payload": { "emergency": false } },
+    { "signal_id": "machine", "event": "fault", "payload": { "emergency": true } },
+    { "signal_id": "machine", "event": "reset" }
+  ]
+}

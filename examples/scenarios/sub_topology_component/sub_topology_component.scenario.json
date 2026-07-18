@@ -1,0 +1,11 @@
+{
+  "expected_final_states": {
+    "controller": "idle",
+    "door": "locked"
+  },
+  "expected_guard_blocked": [],
+  "events": [
+    { "signal_id": "door", "event": "lock" },
+    { "signal_id": "controller", "event": "reset" }
+  ]
+}

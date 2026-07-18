@@ -1,0 +1,12 @@
+{
+  "expected_final_states": {
+    "withdrawal": "approved",
+    "ledger": "debited"
+  },
+  "expected_guard_blocked": [1],
+  "events": [
+    { "signal_id": "withdrawal", "event": "submit" },
+    { "signal_id": "withdrawal", "event": "approve", "payload": { "amount": 5000 } },
+    { "signal_id": "withdrawal", "event": "approve", "payload": { "amount": 500 } }
+  ]
+}
