@@ -139,6 +139,23 @@ fn trace_to_value(e: &TraceEvent) -> Value {
             obj.insert("guard".into(), Value::from(guard.clone()));
             obj.insert("result".into(), Value::from(result.clone()));
         }
+        TraceEvent::ReactionCompensated {
+            reaction_from_signal,
+            reaction_from_state,
+            reaction_to_signal,
+            reaction_event,
+            action_id,
+            error,
+            ..
+        } => {
+            obj.insert("kind".into(), Value::from("ReactionCompensated"));
+            obj.insert("from_signal".into(), Value::from(reaction_from_signal.clone()));
+            obj.insert("from_state".into(), Value::from(reaction_from_state.clone()));
+            obj.insert("to_signal".into(), Value::from(reaction_to_signal.clone()));
+            obj.insert("event".into(), Value::from(reaction_event.clone()));
+            obj.insert("action_id".into(), Value::from(action_id.clone()));
+            obj.insert("error".into(), Value::from(error.clone()));
+        }
     }
     v
 }

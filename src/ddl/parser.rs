@@ -114,6 +114,9 @@ pub struct ReactionDecl {
     /// declared inside a `join <group> { ... }` block. Empty when the reaction
     /// has no dependency (the pre-M44 default).
     pub requires: Vec<String>,
+    /// M47: the compensation action to fire when this reaction's cascade fails,
+    /// if any. `None` (the default) preserves the pre-M47 behavior.
+    pub on_fail: Option<String>,
 }
 
 /// M45: a reusable sub-topology component declaration.
@@ -186,6 +189,8 @@ struct RawReaction {
     // M44: see `ReactionDecl` for semantics.
     join_group: Option<String>,
     requires: Vec<String>,
+    // M47: see `ReactionDecl` for semantics.
+    on_fail: Option<String>,
 }
 
 /// A reaction guard as written in source: either a literal expression or a
@@ -371,6 +376,7 @@ impl<'a> Parser<'a> {
                 payload: r.payload,
                 join_group: r.join_group,
                 requires: r.requires,
+                on_fail: r.on_fail,
             })
         }
 
@@ -549,7 +555,7 @@ impl<'a> Parser<'a> {
         // keyword that opens a reaction's optional static payload block.
         let first_tok = self.peek();
         match first_tok.kind {
-            TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof | TokenKind::With => {
+            TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof | TokenKind::With | TokenKind::OnFail => {
                 return Err(format!(
                     "line {} col {}: 'when' requires a guard expression",
                     first_tok.line, first_tok.col
@@ -563,7 +569,7 @@ impl<'a> Parser<'a> {
 
         loop {
             match self.peek().kind {
-                TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof | TokenKind::With => break,
+                TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof | TokenKind::With | TokenKind::OnFail => break,
                 _ => {
                     end_idx = self.pos;
                     self.advance();
@@ -700,6 +706,19 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // M47: optional compensation hook. `on_fail: <action_id>` names the
+        // action to run when this reaction's cascade fails (best-effort; the
+        // error still propagates). Optional and keyword-driven, so a missing
+        // clause leaves the pre-M47 behavior.
+        let on_fail = if matches!(self.peek().kind, TokenKind::OnFail) {
+            self.advance();
+            self.expect_keyword(TokenKind::Colon)?;
+            let (id, _) = self.expect_any_ident()?;
+            Some(id)
+        } else {
+            None
+        };
+
         Ok(RawReaction {
             from_signal,
             from_state,
@@ -709,6 +728,7 @@ impl<'a> Parser<'a> {
             payload,
             join_group: None,
             requires: Vec::new(),
+            on_fail,
         })
     }
 
@@ -995,7 +1015,7 @@ impl<'a> Parser<'a> {
 
         let first_tok = self.peek();
         match first_tok.kind {
-            TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof | TokenKind::With => {
+            TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof | TokenKind::With | TokenKind::OnFail => {
                 return Err(format!(
                     "line {} col {}: 'when' requires a guard expression",
                     first_tok.line, first_tok.col
@@ -1005,13 +1025,13 @@ impl<'a> Parser<'a> {
         }
 
         // A guard reference is exactly one IDENT token followed by a terminator
-        // (`{`, `}`, `with`, eof). Record whether that single token is an
-        // IDENT, then slice the verbatim text either way.
+        // (`{`, `}`, `with`, eof, `on_fail`). Record whether that single token
+        // is an IDENT, then slice the verbatim text either way.
         let start_idx = self.pos;
         let mut end_idx = self.pos;
         loop {
             match self.peek().kind {
-                TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof | TokenKind::With => break,
+                TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof | TokenKind::With | TokenKind::OnFail => break,
                 _ => {
                     end_idx = self.pos;
                     self.advance();
@@ -1362,6 +1382,54 @@ reaction {
         let r = &doc.reactions[0];
         assert_eq!(r.guard, Some("true".to_string()));
         assert_eq!(r.payload, Some(r#"{ "auto": true, "count": 1 }"#.to_string()));
+    }
+
+    #[test]
+    fn parse_reaction_with_on_fail() {
+        let doc = src_to_doc(
+            r#"
+reaction {
+    when order enters approved -> inventory allocate when payload.auto == true on_fail: cancel_order
+}
+"#,
+        )
+        .unwrap();
+
+        let r = &doc.reactions[0];
+        assert_eq!(r.guard, Some("payload.auto == true".to_string()));
+        assert_eq!(r.on_fail, Some("cancel_order".to_string()));
+    }
+
+    #[test]
+    fn parse_reaction_without_on_fail_defaults_to_none() {
+        let doc = src_to_doc(
+            r#"
+reaction {
+    when order enters approved -> inventory allocate
+}
+"#,
+        )
+        .unwrap();
+
+        let r = &doc.reactions[0];
+        assert!(r.on_fail.is_none());
+    }
+
+    #[test]
+    fn parse_reaction_on_fail_without_guard() {
+        // A reaction may name a compensation action without any guard.
+        let doc = src_to_doc(
+            r#"
+reaction {
+    when order enters approved -> inventory allocate on_fail: cancel_order
+}
+"#,
+        )
+        .unwrap();
+
+        let r = &doc.reactions[0];
+        assert!(r.guard.is_none());
+        assert_eq!(r.on_fail, Some("cancel_order".to_string()));
     }
 
     #[test]

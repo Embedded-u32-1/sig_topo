@@ -334,6 +334,7 @@ fn expand_reaction(
         guard: reaction.guard.clone(),
         join_group: reaction.join_group.clone(),
         requires: reaction.requires.clone(),
+        on_fail: reaction.on_fail.clone(),
     })
 }
 

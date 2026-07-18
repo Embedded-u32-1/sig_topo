@@ -210,4 +210,12 @@ pub struct ReactionDef {
     /// it is reached, same as the pre-M44 serial behavior.
     #[serde(default)]
     pub requires: Vec<String>,
+    /// M47: the compensation action to fire when this reaction's cascade fails,
+    /// if any. When `fire_one_reaction` returns an `Err` and this is
+    /// `Some(action_id)`, the engine runs `action_id` (with the failure message
+    /// carried in the `ActionContext.failure` field) before propagating the
+    /// error upward. `None` (the default) preserves the pre-M47 behavior — the
+    /// cascade error propagates untouched.
+    #[serde(default)]
+    pub on_fail: Option<String>,
 }

@@ -189,6 +189,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
                 "on_exit" => TokenKind::OnExit,
                 "on_transition" => TokenKind::OnTransition,
                 "on_enter" => TokenKind::OnEnter,
+                "on_fail" => TokenKind::OnFail,
                 "guard" => TokenKind::Guard,
                 "fork" => TokenKind::Fork,
                 "join" => TokenKind::Join,

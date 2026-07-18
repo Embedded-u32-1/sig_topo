@@ -56,6 +56,8 @@ pub enum TokenKind {
     OnExit,
     OnTransition,
     OnEnter,
+    // M47: reaction compensation hook (`on_fail: <action_id>`).
+    OnFail,
     Guard,
     // M44: fork/join workflow blocks.
     Fork,

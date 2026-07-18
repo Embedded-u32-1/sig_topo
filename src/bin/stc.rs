@@ -149,6 +149,11 @@ fn schema_to_value(schema: &TopologySchema) -> Value {
                         ),
                     );
                 }
+                // M47: on_fail compensation hook. Emit only when set so legacy
+                // JSON stays unchanged.
+                if let Some(on_fail) = &r.on_fail {
+                    m.insert("on_fail".to_string(), Value::String(on_fail.clone()));
+                }
                 Value::Object(m)
             })
             .collect::<Vec<_>>();

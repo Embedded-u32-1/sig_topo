@@ -405,6 +405,7 @@ mod tests {
                     guard: None,
                     join_group: None,
                     requires: Vec::new(),
+                    on_fail: None,
                 },
                 ReactionDef {
                     from_signal: "inventory".to_string(),
@@ -415,6 +416,7 @@ mod tests {
                     guard: None,
                     join_group: None,
                     requires: Vec::new(),
+                    on_fail: None,
                 },
                 ReactionDef {
                     from_signal: "order".to_string(),
@@ -425,6 +427,7 @@ mod tests {
                     guard: None,
                     join_group: None,
                     requires: Vec::new(),
+                    on_fail: None,
                 },
                 ReactionDef {
                     from_signal: "order".to_string(),
@@ -435,6 +438,7 @@ mod tests {
                     guard: None,
                     join_group: None,
                     requires: Vec::new(),
+                    on_fail: None,
                 },
             ],
             components: None,

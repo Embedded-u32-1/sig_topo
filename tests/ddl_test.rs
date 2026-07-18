@@ -274,6 +274,42 @@ reaction {
 }
 
 #[test]
+fn reaction_on_fail_reaches_reaction_def() {
+    // M47: a reaction's `on_fail: <action_id>` compensation hook is parsed and
+    // lands in `ReactionDef.on_fail` verbatim, so the engine can run it when the
+    // cascade fails.
+    let src = r#"
+signal order {
+    states: [submitted, approved]
+    initial: submitted
+
+    on approve from submitted -> approved
+}
+
+signal inventory {
+    states: [idle, allocating]
+    initial: idle
+
+    on allocate from idle -> allocating
+}
+
+reaction {
+    when order enters approved -> inventory allocate
+        when payload.auto == true
+        on_fail: cancel_order
+}
+"#;
+
+    let schema = signal_topology::ddl::compile(src).expect("reaction with on_fail must compile");
+    assert_eq!(schema.reactions.len(), 1);
+    assert_eq!(
+        schema.reactions[0].on_fail,
+        Some("cancel_order".to_string()),
+        "on_fail must reach ReactionDef.on_fail verbatim"
+    );
+}
+
+#[test]
 fn gate_flow_wildcard_from_end_to_end() {
     // M34: the gate_flow.ddl writes the reset as a single `on reset from * ->
     // closed`. After compiling, that must lower to three `reset` transitions

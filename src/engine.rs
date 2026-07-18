@@ -21,6 +21,11 @@ pub struct ActionContext {
     pub event: String,
     /// The event payload, if any. `None` for events sent without a payload.
     pub payload: Option<Value>,
+    /// M47: the failure message when this action is being run as an `on_fail`
+    /// compensation hook. `None` for every normal lifecycle action. A
+    /// compensation action can read this to learn *why* the reaction's cascade
+    /// failed.
+    pub failure: Option<String>,
 }
 
 /// The outcome of a successful transition, returned by `send_event`.
@@ -309,6 +314,7 @@ impl TopologyEngine {
             to_state: to_state.clone(),
             event: event.to_string(),
             payload: payload.clone(),
+            failure: None,
         };
 
         if let Some(guard) = &transition.guard {
@@ -456,6 +462,7 @@ impl TopologyEngine {
                     .unwrap_or_default(),
                 event: reaction.event.clone(),
                 payload: parent_payload.clone(),
+                failure: None,
             };
             let guard_result = eval_guard(guard_str, &guard_ctx);
             // M38: record the guard outcome (true / false / error) so the trace
@@ -488,14 +495,59 @@ impl TopologyEngine {
         // the `parent_payload` any deeper reaction reacts against. The cascade
         // result is intentionally discarded: each reaction's derived transition
         // records its own `StateChanged`/`Rollbacked` events in the trace.
-        self.send_event_internal(
+        let cascade_result = self.send_event_internal(
             &reaction.to_signal,
             &reaction.event,
             reaction.payload.clone(),
             reaction.payload.clone(),
             depth + 1,
-        )
-        .map(|_| ())
+        );
+
+        // M47: when the cascade fails and this reaction names a compensation
+        // action (`on_fail`), run that action with the failure message carried
+        // in `ActionContext.failure` before propagating the error. The hook is
+        // best-effort — its own outcome never masks the original cascade error.
+        if let Err(e) = cascade_result {
+            let error_msg = e.to_string();
+            if let Some(action_id) = &reaction.on_fail {
+                let to_current = self
+                    .signals
+                    .get(&reaction.to_signal)
+                    .map(|s| s.current.clone())
+                    .unwrap_or_default();
+                let ctx = ActionContext {
+                    signal_id: reaction.to_signal.clone(),
+                    from_state: reaction.from_state.clone(),
+                    to_state: to_current,
+                    event: reaction.event.clone(),
+                    payload: parent_payload.clone(),
+                    failure: Some(error_msg.clone()),
+                };
+                // Run the hook, recording its outcome to the trace like any
+                // other action. A failing hook does not replace the original
+                // error, so its result is intentionally ignored here.
+                let _ = Self::run_action(
+                    &mut self.trace,
+                    &mut self.actions,
+                    &reaction.to_signal,
+                    action_id,
+                    ctx,
+                );
+                self.trace.push(TraceEvent::ReactionCompensated {
+                    signal_id: transition_signal.to_string(),
+                    reaction_from_signal: reaction.from_signal.clone(),
+                    reaction_from_state: reaction.from_state.clone(),
+                    reaction_to_signal: reaction.to_signal.clone(),
+                    reaction_event: reaction.event.clone(),
+                    action_id: action_id.clone(),
+                    error: error_msg,
+                    timestamp_ms: now_ms(),
+                });
+            }
+            return Err(e);
+        }
+
+        Ok(())
     }
 
     /// Dispatch a set of matching reactions with M44 fork/join scheduling.
@@ -854,6 +906,23 @@ fn trace_event_to_value(e: &TraceEvent) -> Value {
             obj.insert("event".into(), Value::from(reaction_event.clone()));
             obj.insert("guard".into(), Value::from(guard.clone()));
             obj.insert("result".into(), Value::from(result.clone()));
+        }
+        TraceEvent::ReactionCompensated {
+            reaction_from_signal,
+            reaction_from_state,
+            reaction_to_signal,
+            reaction_event,
+            action_id,
+            error,
+            ..
+        } => {
+            obj.insert("kind".into(), Value::from("ReactionCompensated"));
+            obj.insert("from_signal".into(), Value::from(reaction_from_signal.clone()));
+            obj.insert("from_state".into(), Value::from(reaction_from_state.clone()));
+            obj.insert("to_signal".into(), Value::from(reaction_to_signal.clone()));
+            obj.insert("event".into(), Value::from(reaction_event.clone()));
+            obj.insert("action_id".into(), Value::from(action_id.clone()));
+            obj.insert("error".into(), Value::from(error.clone()));
         }
     }
     v

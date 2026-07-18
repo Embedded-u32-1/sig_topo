@@ -72,6 +72,28 @@ pub enum TraceEvent {
         result: String,
         timestamp_ms: u64,
     },
+    /// A reaction's cascade failed and its M47 compensation action fired.
+    ///
+    /// Emitted once for every reaction whose `on_fail` cascade fails and whose
+    /// `on_fail` action has been run. The original cascade error is *still*
+    /// propagated upward after compensation — this event only records that the
+    /// hook ran (see `engine::fire_one_reaction`).
+    ReactionCompensated {
+        signal_id: String,
+        /// The `from_signal` of the reaction whose cascade failed.
+        reaction_from_signal: String,
+        /// The `from_state` of the reaction whose cascade failed.
+        reaction_from_state: String,
+        /// The `to_signal` of the reaction whose cascade failed.
+        reaction_to_signal: String,
+        /// The `event` the failed reaction would have delivered.
+        reaction_event: String,
+        /// The compensation action id that ran.
+        action_id: String,
+        /// The cascade error message the compensation action was given.
+        error: String,
+        timestamp_ms: u64,
+    },
 }
 
 impl TraceEvent {
@@ -85,6 +107,7 @@ impl TraceEvent {
             TraceEvent::StateChanged { signal_id, .. } => signal_id,
             TraceEvent::Rollbacked { signal_id, .. } => signal_id,
             TraceEvent::ReactionGuardEvaluated { signal_id, .. } => signal_id,
+            TraceEvent::ReactionCompensated { signal_id, .. } => signal_id,
         }
     }
 
@@ -98,6 +121,7 @@ impl TraceEvent {
             TraceEvent::StateChanged { timestamp_ms, .. } => *timestamp_ms,
             TraceEvent::Rollbacked { timestamp_ms, .. } => *timestamp_ms,
             TraceEvent::ReactionGuardEvaluated { timestamp_ms, .. } => *timestamp_ms,
+            TraceEvent::ReactionCompensated { timestamp_ms, .. } => *timestamp_ms,
         }
     }
 }

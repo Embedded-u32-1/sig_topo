@@ -172,6 +172,7 @@ fn emit_reaction(r: super::parser::ReactionDecl) -> Result<ReactionDef, EngineEr
         guard: r.guard,
         join_group: r.join_group,
         requires: r.requires,
+        on_fail: r.on_fail,
     })
 }
 
@@ -264,6 +265,7 @@ mod tests {
                 payload: None,
                 join_group: None,
                 requires: vec![],
+                on_fail: None,
             }],
             guards: vec![],
             components: vec![],
@@ -296,6 +298,7 @@ mod tests {
                 payload: None,
                 join_group: None,
                 requires: vec![],
+                on_fail: None,
             }],
             guards: vec![],
             components: vec![],
@@ -323,6 +326,7 @@ mod tests {
                 payload: Some(r#"{ "auto": true, "count": 1 }"#.to_string()),
                 join_group: None,
                 requires: vec![],
+                on_fail: None,
             }],
             guards: vec![],
             components: vec![],
@@ -335,6 +339,62 @@ mod tests {
             schema.reactions[0].payload,
             Some(serde_json::json!({"auto": true, "count": 1 }))
         );
+    }
+
+    #[test]
+    fn codegen_reaction_on_fail_passes_through() {
+        // M47: a reaction's `on_fail` compensation action id passes through
+        // verbatim into `ReactionDef.on_fail`.
+        let schema = emit(DdlDoc {
+            signals: vec![],
+            reactions: vec![crate::ddl::parser::ReactionDecl {
+                from_signal: "order".to_string(),
+                from_state: "approved".to_string(),
+                to_signal: "fulfill".to_string(),
+                event: "begin".to_string(),
+                guard: None,
+                guard_ref: None,
+                payload: None,
+                join_group: None,
+                requires: vec![],
+                on_fail: Some("cancel_order".to_string()),
+            }],
+            guards: vec![],
+            components: vec![],
+            instantiates: vec![],
+        })
+        .unwrap();
+
+        assert_eq!(schema.reactions.len(), 1);
+        assert_eq!(
+            schema.reactions[0].on_fail,
+            Some("cancel_order".to_string())
+        );
+    }
+
+    #[test]
+    fn codegen_reaction_on_fail_default_is_none() {
+        let schema = emit(DdlDoc {
+            signals: vec![],
+            reactions: vec![crate::ddl::parser::ReactionDecl {
+                from_signal: "order".to_string(),
+                from_state: "approved".to_string(),
+                to_signal: "fulfill".to_string(),
+                event: "begin".to_string(),
+                guard: None,
+                guard_ref: None,
+                payload: None,
+                join_group: None,
+                requires: vec![],
+                on_fail: None,
+            }],
+            guards: vec![],
+            components: vec![],
+            instantiates: vec![],
+        })
+        .unwrap();
+
+        assert_eq!(schema.reactions[0].on_fail, None);
     }
 
     #[test]
@@ -353,6 +413,7 @@ mod tests {
                 payload: Some(r#"{ not json }"#.to_string()),
                 join_group: None,
                 requires: vec![],
+                on_fail: None,
             }],
             guards: vec![],
             components: vec![],

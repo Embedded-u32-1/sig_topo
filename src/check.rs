@@ -326,6 +326,7 @@ mod tests {
             payload: None,
             join_group: None,
             requires: vec![],
+            on_fail: None,
         }
     }
 

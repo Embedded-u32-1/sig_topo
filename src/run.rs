@@ -229,6 +229,25 @@ pub fn format_trace(event: &TraceEvent) -> String {
             guard,
             result
         ),
+        TraceEvent::ReactionCompensated {
+            signal_id: _,
+            reaction_from_signal,
+            reaction_from_state,
+            reaction_to_signal,
+            reaction_event,
+            action_id,
+            error,
+            timestamp_ms,
+        } => format!(
+            "[{}] ReactionCompensated {}.{} -> {}.{} on_fail={} error={}",
+            timestamp_ms,
+            reaction_from_signal,
+            reaction_from_state,
+            reaction_to_signal,
+            reaction_event,
+            action_id,
+            error
+        ),
     }
 }
 

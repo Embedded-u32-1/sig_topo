@@ -68,6 +68,7 @@ fn notify_component() -> ComponentDef {
             guard: None,
             join_group: None,
             requires: Vec::new(),
+            on_fail: None,
         }],
     }
 }
@@ -406,6 +407,7 @@ fn notify_port_component() -> ComponentDef {
             guard: None,
             join_group: None,
             requires: Vec::new(),
+            on_fail: None,
         }],
     }
 }

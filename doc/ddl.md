@@ -74,7 +74,8 @@ lifecycle   = ("on_exit" | "on_transition" | "on_enter")
 reaction    = "reaction"
               "{" "when" IDENT "enters" IDENT "->" IDENT IDENT
               [ "when" ( guard_expr | IDENT ) ]
-              [ "with" "{" ... "}" ] [ "{" "}" ] "}"
+              [ "with" "{" ... "}" ] [ "{" "}" ]
+              [ "on_fail" ":" IDENT ] "}"
 
 guard       = "guard" IDENT "{" guard_expr "}"
 
@@ -98,6 +99,7 @@ instantiate = "instantiate" IDENT "as" IDENT
 reaction_body = "when" IDENT "enters" IDENT "->" IDENT IDENT
                 [ "when" ( guard_expr | IDENT ) ]
                 [ "with" "{" ... "}" ]
+                [ "on_fail" ":" IDENT ]
 
 note: inside a `fork`/`join` block each `reaction_body` is a self-contained
 `when ... enters ... -> ...` clause (no wrapping `reaction { }`). The word
@@ -162,6 +164,7 @@ unchanged.
 | `reaction { ... when G }` (reaction guard)  | `reactions[].guard` (string, verbatim; evaluated at cascade) |
 | `reaction { ... when ID }` (guard ref)      | `reactions[].guard` (the referenced guard's expr, inlined verbatim) |
 | `reaction { ... with { ... } }` (payload)   | `reactions[].payload` (JSON `Value`; the derived event's payload) |
+| `reaction { ... on_fail: A }` (M47)          | `reactions[].on_fail` (`Some("A")`; compensation action on cascade failure) |
 | `fork { ... }` (M44) block members          | `reactions[].join_group` = the block's auto name (`fork0`, `fork1`, …) |
 | `join <group> { ... }` (M44) block members  | `reactions[].requires` = `["<group>"]` |
 | `guard ID { G }` (M38)                      | no direct JSON field; inlined into each `reactions[].guard` that refs it |
@@ -351,6 +354,34 @@ transition the reaction reacts to — the same rule as a transition guard), whil
 the reaction's **static payload** (`with { ... }`) rides on the *derived* event
 to the target.
 
+### Reaction compensation (M47)
+
+A reaction may name a compensation action to run when its cascade fails:
+
+```ddl
+reaction {
+    when order enters approved -> inventory allocate
+        when payload.auto == true
+        on_fail: cancel_order
+}
+```
+
+`on_fail: <action_id>` is optional. When the cascade the reaction triggers
+fails (a lifecycle action in the target signal's derived transition fails, so
+the target rolls back and the cascade error propagates), the engine runs the
+named action **before** propagating that error upward. The action is run with
+the failure message carried in its `ActionContext.failure` field, so a
+compensation hook can learn *why* the cascade failed. The hook is best-effort:
+its own completion or failure never masks the original cascade error, which is
+still returned. This makes `on_fail` a cross-signal rollback hook — e.g. undo
+reservation bookkeeping when an allocation cascade cannot complete.
+
+The hook runs once per failing reaction, in the natural cascade order
+(bottom-up: an inner failing reaction compensates before the outer reaction
+that cascaded into it observes the failure and compensates in turn). A reaction
+with no `on_fail` behaves exactly as before — the cascade error propagates
+untouched.
+
 ## Fork / join (M44)
 
 A single transition can fan out to several cross-signal reactions, and a later
@@ -505,6 +536,7 @@ order_approval.ddl ──stc──▶ order_approval.json ──▶ engine (sts/
 | `... 'from' state 'X' is not in the states list for 'S'` (for `from *`) | `*` is the only wildcard; other names must be in `states`. |
 | `line L col C: 'when' requires a guard expression`                      | Empty `when` with no expression.               |
 | `reaction payload is not valid JSON: ...`                               | The `with { ... }` block isn't valid JSON.    |
+| `line L col C: expected Identifier, found ...` (after `on_fail:`)       | `on_fail:` must be followed by an action id.  |
 | `Failed to compile '...': line L col C: unterminated string literal`    | A `'...'` string wasn't closed.                |
 
 All error messages carry `line`/`col` pointing at the offending token. The
